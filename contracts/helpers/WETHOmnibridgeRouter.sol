@@ -25,11 +25,7 @@ contract WETHOmnibridgeRouter is OwnableModule, Claimable {
      * @param _weth address of the WETH token used for wrapping/unwrapping native coins (e.g. WETH/WBNB/WXDAI).
      * @param _owner address of the contract owner.
      */
-    constructor(
-        IOmnibridge _bridge,
-        IWETH _weth,
-        address _owner
-    ) OwnableModule(_owner) {
+    constructor(IOmnibridge _bridge, IWETH _weth, address _owner) OwnableModule(_owner) {
         bridge = _bridge;
         WETH = _weth;
         _weth.approve(address(_bridge), uint256(-1));
@@ -53,6 +49,17 @@ contract WETHOmnibridgeRouter is OwnableModule, Claimable {
     }
 
     /**
+     * @dev Wraps native assets and relays wrapped ERC20 tokens to the other chain.
+     * It also calls receiver on other side with the _data provided.
+     * @param _receiver bridged assets receiver on the other side of the bridge.
+     * @param _data data for the call of receiver on other side.
+     */
+    function wrapAndRelayTokens(address _receiver, bytes memory _data) public payable {
+        WETH.deposit{ value: msg.value }();
+        bridge.relayTokensAndCall(address(WETH), _receiver, msg.value, _data);
+    }
+
+    /**
      * @dev Bridged callback function used for unwrapping received tokens.
      * Can only be called by the associated Omnibridge contract.
      * @param _token bridged token contract address, should be WETH.
@@ -60,11 +67,7 @@ contract WETHOmnibridgeRouter is OwnableModule, Claimable {
      * @param _data extra data passed alongside with relayTokensAndCall on the other side of the bridge.
      * Should contain coins receiver address.
      */
-    function onTokenBridged(
-        address _token,
-        uint256 _value,
-        bytes memory _data
-    ) external {
+    function onTokenBridged(address _token, uint256 _value, bytes memory _data) external {
         require(_token == address(WETH));
         require(msg.sender == address(bridge));
         require(_data.length == 20);

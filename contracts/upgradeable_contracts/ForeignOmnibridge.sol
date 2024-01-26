@@ -11,6 +11,7 @@ import "../libraries/SafeMint.sol";
  * It is designed to be used as an implementation contract of EternalStorageProxy contract.
  */
 contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnector {
+    using SafeERC20 for IERC20;
     using SafeERC20 for IERC677;
     using SafeMint for IBurnableMintableERC677Token;
     using SafeMath for uint256;
@@ -55,13 +56,46 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
 
     /**
      * One-time function to be used together with upgradeToAndCall method.
-     * Sets the token factory contract.
+     * Sets the token factory contract and enables interest earning for USDC and USDT
+     * Selector: d814b1d7
      * @param _tokenFactory address of the deployed TokenFactory contract.
      */
-    function upgradeToReverseMode(address _tokenFactory) external {
-        require(msg.sender == address(this));
+    function migrateTo_3_3_0(address _tokenFactory, address _interestImplementation) external {
+        bytes32 upgradeStorage = 0xd814b1d787b8a2d93a1c320d66800a58a03ed3bf12b285ec5ec1e0e26d6550cc; // keccak256(abi.encodePacked('migrateTo_3_3_0(address,address)'))
+        require(!boolStorage[upgradeStorage]);
 
         _setTokenFactory(_tokenFactory);
+
+        // required for Tornado Cash operations
+        _setRequestGasLimit(2000000);
+
+        // USDC
+        address token = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
+        uint256 minCash = 2500000 * 1000000; // 2'500'000 USDC
+        _setInterestImplementation(token, _interestImplementation);
+        _setMinCashThreshold(token, minCash);
+
+        uint256 balance = mediatorBalance(token);
+        require(balance > minCash);
+        uint256 amount = balance - minCash;
+
+        IERC20(token).safeTransfer(_interestImplementation, amount);
+        IInterestImplementation(_interestImplementation).invest(token, amount);
+
+        // USDT
+        token = address(0xdAC17F958D2ee523a2206206994597C13D831ec7);
+        minCash = 750000 * 1000000; // 750'000 USDT
+        _setInterestImplementation(token, _interestImplementation);
+        _setMinCashThreshold(token, minCash);
+
+        balance = mediatorBalance(token);
+        require(balance > minCash);
+        amount = balance - minCash;
+
+        IERC20(token).safeTransfer(_interestImplementation, amount);
+        IInterestImplementation(_interestImplementation).invest(token, amount);
+
+        boolStorage[upgradeStorage] = true;
     }
 
     /**
@@ -72,12 +106,7 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
      * @param _recipient address that will receive the tokens.
      * @param _value amount of tokens to be received.
      */
-    function _handleTokens(
-        address _token,
-        bool _isNative,
-        address _recipient,
-        uint256 _value
-    ) internal override {
+    function _handleTokens(address _token, bool _isNative, address _recipient, uint256 _value) internal override {
         // prohibit withdrawal of tokens during other bridge operations (e.g. relayTokens)
         // such reentrant withdrawal can lead to an incorrect balanceDiff calculation
         require(!lock());

@@ -66,25 +66,32 @@ contract HomeOmnibridge is
     /**
      * One-time function to be used together with upgradeToAndCall method.
      * Sets the token factory contract. Resumes token bridging in the home to foreign direction.
+     * Selector: 1ba9212d
      * @param _tokenFactory address of the deployed TokenFactory contract.
      * @param _forwardingRulesManager address of the deployed MultiTokenForwardingRulesManager contract.
      * @param _gasLimitManager address of the deployed SelectorTokenGasLimitManager contract.
-     * @param _dailyLimit default daily limits used before stopping the bridge operation.
+     * @param _feeManager address of the deployed OmnibridgeFeeManager contract.
      */
-    function upgradeToReverseMode(
+    function migrateTo_3_3_0(
         address _tokenFactory,
         address _forwardingRulesManager,
         address _gasLimitManager,
-        uint256 _dailyLimit
+        address _feeManager
     ) external {
+        bytes32 upgradeStorage = 0x1ba9212d27ad775f3f89cdd276d3829dd95d169a049be071de905db3bbca633e; // keccak256(abi.encodePacked('migrateTo_3_3_0(address,address,address,address)'))
+        require(!boolStorage[upgradeStorage]);
+        //
         require(msg.sender == address(this));
 
         _setTokenFactory(_tokenFactory);
         _setForwardingRulesManager(_forwardingRulesManager);
         _setGasLimitManager(_gasLimitManager);
+        _setFeeManager(_feeManager);
 
-        uintStorage[keccak256(abi.encodePacked("dailyLimit", address(0)))] = _dailyLimit;
-        emit DailyLimitChanged(address(0), _dailyLimit);
+        uintStorage[keccak256(abi.encodePacked("dailyLimit", address(0)))] = 1000000000000000000000000000000000000;
+        emit DailyLimitChanged(address(0), 1000000000000000000000000000000000000);
+
+        boolStorage[upgradeStorage] = true;
     }
 
     /**
@@ -113,12 +120,7 @@ contract HomeOmnibridge is
      * @param _recipient address that will receive the tokens.
      * @param _value amount of tokens to be received.
      */
-    function _handleTokens(
-        address _token,
-        bool _isNative,
-        address _recipient,
-        uint256 _value
-    ) internal override {
+    function _handleTokens(address _token, bool _isNative, address _recipient, uint256 _value) internal override {
         // prohibit withdrawal of tokens during other bridge operations (e.g. relayTokens)
         // such reentrant withdrawal can lead to an incorrect balanceDiff calculation
         require(!lock());
@@ -203,18 +205,15 @@ contract HomeOmnibridge is
      * @param _token address of the token to mint.
      * @return address of the minter contract that should be used for calling mint(address,uint256)
      */
-    function _getMinterFor(address _token)
-        internal
-        pure
-        override(BasicOmnibridge, OmnibridgeFeeManagerConnector)
-        returns (IBurnableMintableERC677Token)
-    {
+    function _getMinterFor(
+        address _token
+    ) internal pure override(BasicOmnibridge, OmnibridgeFeeManagerConnector) returns (IBurnableMintableERC677Token) {
         // It is possible to hardcode different token minter contracts here during compile time.
         // For example, the dedicated TokenMinter (0x857DD07866C1e19eb2CDFceF7aE655cE7f9E560d) is used for
         // bridged STAKE token (0xb7D311E2Eb55F2f68a9440da38e7989210b9A05e).
         if (_token == address(0xb7D311E2Eb55F2f68a9440da38e7989210b9A05e)) {
             // hardcoded address of the TokenMinter address
-            return IBurnableMintableERC677Token(0xb7D311E2Eb55F2f68a9440da38e7989210b9A05e);
+            return IBurnableMintableERC677Token(0x857DD07866C1e19eb2CDFceF7aE655cE7f9E560d);
         }
         return IBurnableMintableERC677Token(_token);
     }

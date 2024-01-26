@@ -21,17 +21,11 @@ contract OmnibridgeInfo is VersionableBridge {
      * @return minor value of the version
      * @return patch value of the version
      */
-    function getBridgeInterfacesVersion()
-        external
-        pure
-        override
-        returns (
-            uint64 major,
-            uint64 minor,
-            uint64 patch
-        )
-    {
-        return (3, 3, 0);
+    function getBridgeInterfacesVersion() external pure override returns (uint64 major, uint64 minor, uint64 patch) {
+        /*
+        The patch component was updates since there are changes in minPerTx()
+        */
+        return (3, 3, 1);
     }
 
     /**
