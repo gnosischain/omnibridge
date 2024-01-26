@@ -86,7 +86,16 @@ contract TokensBridgeLimits is EternalStorage, Ownable {
      * @return minimum amount on tokens that can be sent through the bridge in one transfer.
      */
     function minPerTx(address _token) public view returns (uint256) {
-        return uintStorage[keccak256(abi.encodePacked("minPerTx", _token))];
+        /*
+        Updated to reset min limit to 1 wei. As per the Bridge governance decision,
+        there is no need to limit minimal amount of tokens transfered through the 
+        bridge.
+        */
+        uint256 limit = uintStorage[keccak256(abi.encodePacked("minPerTx", _token))];
+        if (_token == address(0)) {
+            return limit;
+        }
+        return limit > 0 ? 1 : 0;
     }
 
     /**
@@ -207,11 +216,7 @@ contract TokensBridgeLimits is EternalStorage, Ownable {
      * @param _day day number, when tokens are processed.
      * @param _value amount of bridge tokens.
      */
-    function addTotalSpentPerDay(
-        address _token,
-        uint256 _day,
-        uint256 _value
-    ) internal {
+    function addTotalSpentPerDay(address _token, uint256 _day, uint256 _value) internal {
         uintStorage[keccak256(abi.encodePacked("totalSpentPerDay", _token, _day))] = totalSpentPerDay(_token, _day).add(
             _value
         );
@@ -223,16 +228,11 @@ contract TokensBridgeLimits is EternalStorage, Ownable {
      * @param _day day number, when tokens are processed.
      * @param _value amount of bridge tokens.
      */
-    function addTotalExecutedPerDay(
-        address _token,
-        uint256 _day,
-        uint256 _value
-    ) internal {
+    function addTotalExecutedPerDay(address _token, uint256 _day, uint256 _value) internal {
         uintStorage[keccak256(abi.encodePacked("totalExecutedPerDay", _token, _day))] = totalExecutedPerDay(
             _token,
             _day
-        )
-            .add(_value);
+        ).add(_value);
     }
 
     /**
@@ -276,7 +276,7 @@ contract TokensBridgeLimits is EternalStorage, Ownable {
     function _initializeTokenBridgeLimits(address _token, uint256 _decimals) internal {
         uint256 factor;
         if (_decimals < 18) {
-            factor = 10**(18 - _decimals);
+            factor = 10 ** (18 - _decimals);
 
             uint256 _minPerTx = minPerTx(address(0)).div(factor);
             uint256 _maxPerTx = maxPerTx(address(0)).div(factor);
@@ -304,7 +304,7 @@ contract TokensBridgeLimits is EternalStorage, Ownable {
             _setLimits(_token, [_dailyLimit, _maxPerTx, _minPerTx]);
             _setExecutionLimits(_token, [_executionDailyLimit, _executionMaxPerTx]);
         } else {
-            factor = 10**(_decimals - 18);
+            factor = 10 ** (_decimals - 18);
             _setLimits(
                 _token,
                 [dailyLimit(address(0)).mul(factor), maxPerTx(address(0)).mul(factor), minPerTx(address(0)).mul(factor)]
