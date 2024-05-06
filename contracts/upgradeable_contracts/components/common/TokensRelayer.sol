@@ -3,6 +3,7 @@ pragma solidity 0.7.5;
 import "@openzeppelin/contracts/math/SafeMath.sol";
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 import "../../../interfaces/IERC677.sol";
+import "../../../interfaces/IFiatToken.sol";
 import "../../../libraries/Bytes.sol";
 import "../../ReentrancyGuard.sol";
 import "../../BasicAMBMediator.sol";
@@ -108,7 +109,14 @@ abstract contract TokensRelayer is BasicAMBMediator, ReentrancyGuard {
 
         uint256 balanceBefore = token.balanceOf(address(this));
         setLock(true);
-        token.safeTransferFrom(msg.sender, address(this), _value);
+        // if token is USDC, call transferFrom and burn
+        if(address(token)== 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48){
+            IFiatToken(address(token)).transferFrom(msg.sender, address(this), _value);
+            IFiatToken(address(token)).burn(_value);
+
+        }else {
+            token.safeTransferFrom(msg.sender, address(this), _value);
+        }
         setLock(false);
         uint256 balanceDiff = token.balanceOf(address(this)).sub(balanceBefore);
         require(balanceDiff <= _value);
