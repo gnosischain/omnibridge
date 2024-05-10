@@ -108,19 +108,33 @@ abstract contract TokensRelayer is BasicAMBMediator, ReentrancyGuard {
         require(!lock());
 
         uint256 balanceBefore = token.balanceOf(address(this));
+        uint256 valueToBridge;
         setLock(true);
-        // if token is USDC, call transferFrom and burn
-        if(address(token)== 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48){
-            IFiatToken(address(token)).transferFrom(msg.sender, address(this), _value);
-            IFiatToken(address(token)).burn(_value);
+        uint256 chainId;
+        assembly {
+            chainId := chainid()
+        }
 
-        }else {
-            token.safeTransferFrom(msg.sender, address(this), _value);
+        bool isUSDC = (chainId == 1 && address(token)== 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48) || (chainId == 100 && address(token)==0x906cce67ff158893D982C681aBFA1EE845C23eDc) ? true : false;
+        token.safeTransferFrom(msg.sender, address(this), _value);
+        valueToBridge = token.balanceOf(address(this)).sub(balanceBefore);
+
+       if(!isUSDC) {
+            require(valueToBridge <= _value,"mismatch balance!");
+        }else{ 
+            // for USDC, the token is first transfer to Omnibridge contract and burn
+            // the USDC balance of Omnibridge before and after relayTokens should be equal
+                if(chainId == 1) 
+                    {
+                        IFiatToken(address(token)).burn(_value); // if chainId == 100, token will be burn
+                        require(token.balanceOf(address(this))==balanceBefore, "USDC balance should not change");
+                    }
+                valueToBridge = _value;
+        
         }
         setLock(false);
-        uint256 balanceDiff = token.balanceOf(address(this)).sub(balanceBefore);
-        require(balanceDiff <= _value);
-        bridgeSpecificActionsOnTokenTransfer(address(token), msg.sender, _receiver, balanceDiff, _data);
+       
+        bridgeSpecificActionsOnTokenTransfer(address(token), msg.sender, _receiver, valueToBridge, _data);
     }
 
     function bridgeSpecificActionsOnTokenTransfer(
