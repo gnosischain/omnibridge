@@ -97,10 +97,6 @@ contract TokensBridgeLimits is EternalStorage, Ownable {
      */
     function withinLimit(address _token, uint256 _amount) public  returns (bool) {
         uint256 nextLimit = totalSpentPerDay(_token, getCurrentDay()).add(_amount);
-        emit WithinLimit(dailyLimit(_token), maxPerTx(_token),minPerTx(_token),_amount);
-        require(dailyLimit(_token) >= nextLimit, "out of dailyt Limit");
-        require( _amount <= maxPerTx(_token), "max Per tx exceed");
-        require(_amount >= minPerTx(_token), "min Per tx below");
 
         return
             dailyLimit(address(0)) > 0 &&

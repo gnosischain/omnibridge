@@ -12,3 +12,4 @@ e2e-tests/.env
 out
 usdc_test/test_output/
 .env
+cache

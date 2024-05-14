@@ -141,7 +141,7 @@ contract HomeOmnibridge is
         // such reentrant withdrawal can lead to an incorrect balanceDiff calculation
         require(!lock());
 
-        require(withinExecutionLimit(_token, _value),"out of execution limit");
+        require(withinExecutionLimit(_token, _value), "out of execution limit");
         addTotalExecutedPerDay(_token, getCurrentDay(), _value);
 
         uint256 valueToBridge = _value;
@@ -157,7 +157,6 @@ contract HomeOmnibridge is
         emit TokensBridged(_token, _recipient, valueToBridge, _messageId);
     }
 
-    event BridgeSpecific(bool indexed isYes);
     /**
      * @dev Executes action on deposit of bridged tokens
      * @param _token address of the token contract
@@ -173,7 +172,6 @@ contract HomeOmnibridge is
         uint256 _value,
         bytes memory _data
     ) internal override {
-        emit BridgeSpecific(true);
         require(_receiver != address(0) && _receiver != mediatorContractOnOtherSide());
 
         // native unbridged token
@@ -182,7 +180,7 @@ contract HomeOmnibridge is
             _initializeTokenBridgeLimits(_token, decimals);
         }
 
-        require(withinLimit(_token, _value), "out of limit in Home Omnibridge");
+        require(withinLimit(_token, _value), "out of limit");
         addTotalSpentPerDay(_token, getCurrentDay(), _value);
 
         address nativeToken = nativeTokenAddress(_token);
