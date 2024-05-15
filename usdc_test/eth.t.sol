@@ -28,7 +28,7 @@ contract ethTest is Test {
     event CircleAddressSet(address indexed oldCircleAddress, address indexed newCircleAddress);
 
     function setUp() public {
-        ForeignOmnibridge newForeignOmnibridgeImplementation = new ForeignOmnibridge("on ETH");
+        ForeignOmnibridge newForeignOmnibridgeImplementation = new ForeignOmnibridge(" on Mainnet");
         EternalStorageProxy foreignOmnibridgeProxy = EternalStorageProxy(payable(vm.envAddress("FOREIGN_OMNIBRIDGE")));
         vm.prank(foreignOmnibridgeProxy.upgradeabilityOwner());
         foreignOmnibridgeProxy.upgradeTo(7, address(newForeignOmnibridgeImplementation));
@@ -163,7 +163,6 @@ contract ethTest is Test {
         masterMinter.configureController(circleAddr, address(foreignOmnibridge));
         vm.prank(circleAddr);
         masterMinter.configureMinter(mintingAllowance);
-
         assertEq(masterMinter.getWorker(circleAddr), address(foreignOmnibridge));
     }
 

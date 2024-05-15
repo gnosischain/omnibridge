@@ -29,7 +29,7 @@ contract gnoTest is Test {
     uint256 ethSenderUSDCAmount;
 
     function setUp() public {
-        HomeOmnibridge newHomeOmnibridgeImplementation = new HomeOmnibridge("on xDAI");
+        HomeOmnibridge newHomeOmnibridgeImplementation = new HomeOmnibridge(" on xDAI");
         EternalStorageProxy homeOmnibridgeProxy = EternalStorageProxy(payable(vm.envAddress("HOME_OMNIBRIDGE")));
         vm.prank(homeOmnibridgeProxy.upgradeabilityOwner());
         homeOmnibridgeProxy.upgradeTo(9, address(newHomeOmnibridgeImplementation));
