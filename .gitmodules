@@ -1,0 +1,7 @@
+[submodule "stablecoin-evm"]
+	path = stablecoin-evm
+	url = https://github.com/zengzengzenghuy/stablecoin-evm/
+	branch = foundry_deployment
+[submodule "lib/forge-std"]
+	path = lib/forge-std
+	url = https://github.com/foundry-rs/forge-std

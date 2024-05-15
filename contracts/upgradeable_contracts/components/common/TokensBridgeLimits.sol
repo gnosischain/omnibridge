@@ -88,15 +88,16 @@ contract TokensBridgeLimits is EternalStorage, Ownable {
     function minPerTx(address _token) public view returns (uint256) {
         return uintStorage[keccak256(abi.encodePacked("minPerTx", _token))];
     }
-
+    event WithinLimit(uint256 indexed dailyLimit, uint256 indexed maxPerTx, uint256 indexed minPerTx,uint256 amount);
     /**
      * @dev Checks that bridged amount of tokens conforms to the configured limits.
      * @param _token address of the token contract.
      * @param _amount amount of bridge tokens.
      * @return true, if specified amount can be bridged.
      */
-    function withinLimit(address _token, uint256 _amount) public view returns (bool) {
+    function withinLimit(address _token, uint256 _amount) public  returns (bool) {
         uint256 nextLimit = totalSpentPerDay(_token, getCurrentDay()).add(_amount);
+
         return
             dailyLimit(address(0)) > 0 &&
             dailyLimit(_token) >= nextLimit &&

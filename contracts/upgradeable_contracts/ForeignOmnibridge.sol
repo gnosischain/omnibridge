@@ -4,6 +4,7 @@ import "./BasicOmnibridge.sol";
 import "./components/common/GasLimitManager.sol";
 import "./components/common/InterestConnector.sol";
 import "../libraries/SafeMint.sol";
+import "../interfaces/IFiatToken.sol";
 
 /**
  * @title ForeignOmnibridge
@@ -14,6 +15,8 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
     using SafeERC20 for IERC677;
     using SafeMint for IBurnableMintableERC677Token;
     using SafeMath for uint256;
+
+    event CircleAddressSet(address indexed oldCircleAddress, address indexed newCircleAddress);
 
     constructor(string memory _suffix) BasicOmnibridge(_suffix) {}
 
@@ -64,6 +67,29 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
         _setTokenFactory(_tokenFactory);
     }
 
+    function setCircleAddress(address circleAddr) external onlyOwner{
+        require(circleAddr!=address(0),"invalid address");
+        addressStorage[keccak256("CIRCLE_ADDRESS")] = circleAddr;
+        emit CircleAddressSet(address(0),circleAddr);
+    }
+
+    function getCircleAddress()public view returns(address){
+        address circleAddr =  addressStorage[keccak256("CIRCLE_ADDRESS")] ;
+        return circleAddr;
+    }
+
+    function burnLockedUSDC(uint256 amount) external {
+        address usdcAddr = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+        uint256 mediatorUSDCBalance = mediatorBalance(usdcAddr);
+
+        require(msg.sender==getCircleAddress(),"caller is not Circle");
+        require(!boolStorage[keccak256("IS_BURN_LOCKED_USDC_CALLED")],"function already called");
+        require(amount>0, "invalid burn amount");
+       
+        boolStorage[keccak256("IS_BURN_LOCKED_USDC_CALLED")] = true;
+        IFiatToken(usdcAddr).burn(amount);
+        _setMediatorBalance(usdcAddr, mediatorUSDCBalance - amount);
+    }
     /**
      * @dev Handles the bridged tokens.
      * Checks that the value is inside the execution limits and invokes the Mint or Unlock accordingly.
@@ -113,7 +139,7 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
             _initializeTokenBridgeLimits(_token, decimals);
         }
 
-        require(withinLimit(_token, _value));
+        require(withinLimit(_token, _value), "out of limit");
         addTotalSpentPerDay(_token, getCurrentDay(), _value);
 
         bytes memory data = _prepareMessage(nativeTokenAddress(_token), _token, _receiver, _value, _data);
@@ -137,7 +163,16 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
         uint256 _balanceChange
     ) internal override {
         if (_isNative) {
-            // There are two edge cases related to withdrawals on the foreign side of the bridge.
+            // if token is USDC, then omnibridge mint new USDC
+            if(_token == 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48){
+              
+                uint256 balance = mediatorBalance(_token);
+                _setMediatorBalance(_token, balance.sub(_balanceChange));
+                (bool result) = IFiatToken(_token).mint(_recipient, _value);
+                require(result, "mint USDC fail");
+            }
+            else {
+                  // There are two edge cases related to withdrawals on the foreign side of the bridge.
             // 1) Minting of extra STAKE tokens, if supply on the Home side exceeds total bridge amount on the Foreign side.
             // 2) Withdrawal of the invested tokens back from the Compound-like protocol, if currently available funds are insufficient.
             // Most of the time, these cases do not intersect. However, in case STAKE tokens are also invested (e.g. via EasyStaking),
@@ -169,6 +204,8 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
 
             _setMediatorBalance(_token, balance.sub(_balanceChange));
             IERC677(_token).safeTransfer(_recipient, _value);
+            }
+          
         } else {
             _getMinterFor(_token).safeMint(_recipient, _value);
         }
