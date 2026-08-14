@@ -14,6 +14,8 @@
     "lint:sol": "solhint --max-warnings 0 \"contracts/**/*.sol\"",
     "lint:sol:prettier:fix": "prettier --write \"contracts/**/*.sol\"",
     "deploy": "node deploy/deploy.js",
+    "deploy-upgrade": "./deploy.sh",
+    "e2e-tests:usdcupgrade": "./usdcTest.sh",
     "e2e-tests:local": "./e2e-tests/run-tests.sh local",
     "e2e-tests:public": "./e2e-tests/run-tests.sh"
   },

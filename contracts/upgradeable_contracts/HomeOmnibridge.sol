@@ -94,6 +94,24 @@ contract HomeOmnibridge is
         boolStorage[upgradeStorage] = true;
     }
 
+    function upgradeToVersion9() external onlyOwner(){
+        bytes32 upgradeToVersion9Slot = keccak256("upgradeToVersion9");
+        require(!boolStorage[upgradeToVersion9Slot],"already upgrade to version 9");
+       
+        address USDC_ON_ETH = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+        address USDCE=0x906cce67ff158893D982C681aBFA1EE845C23eDc;
+        address USDC_ON_XDAI = 0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83;
+        
+        _setTokenAddressPair(USDC_ON_ETH, USDCE);
+        _setLimits(USDCE,[dailyLimit(address(0)),maxPerTx(address(0)),1e6]);
+        _setExecutionLimits(USDCE,[executionDailyLimit(address(0)),executionMaxPerTx(address(0))]);
+
+        _setTokenAddressPair(address(0), USDC_ON_XDAI);
+        uintStorage[keccak256(abi.encodePacked("dailyLimit", USDC_ON_XDAI))] = 0;
+        emit DailyLimitChanged(USDC_ON_XDAI, 0);
+
+
+    } 
     /**
      * @dev Alias for bridgedTokenAddress for interface compatibility with the prior version of the Home mediator.
      * @param _foreignToken address of the native token contract on the other side.
@@ -125,7 +143,7 @@ contract HomeOmnibridge is
         // such reentrant withdrawal can lead to an incorrect balanceDiff calculation
         require(!lock());
 
-        require(withinExecutionLimit(_token, _value));
+        require(withinExecutionLimit(_token, _value), "out of execution limit");
         addTotalExecutedPerDay(_token, getCurrentDay(), _value);
 
         uint256 valueToBridge = _value;
@@ -164,7 +182,7 @@ contract HomeOmnibridge is
             _initializeTokenBridgeLimits(_token, decimals);
         }
 
-        require(withinLimit(_token, _value));
+        require(withinLimit(_token, _value), "out of limit");
         addTotalSpentPerDay(_token, getCurrentDay(), _value);
 
         address nativeToken = nativeTokenAddress(_token);
