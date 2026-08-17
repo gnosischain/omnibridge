@@ -6,4 +6,11 @@ interface IOmnibridge {
         address _receiver,
         uint256 _value
     ) external;
+
+    function relayTokensAndCall(
+        address _token,
+        address _receiver,
+        uint256 _value,
+        bytes calldata _data
+    ) external;
 }

@@ -112,11 +112,7 @@ abstract contract BasicOmnibridge is
      * @param _recipient address that will receive the tokens.
      * @param _value amount of tokens to be received.
      */
-    function handleBridgedTokens(
-        address _token,
-        address _recipient,
-        uint256 _value
-    ) external onlyMediator {
+    function handleBridgedTokens(address _token, address _recipient, uint256 _value) external onlyMediator {
         address token = bridgedTokenAddress(_token);
 
         require(isTokenRegistered(token));
@@ -133,12 +129,10 @@ abstract contract BasicOmnibridge is
      * @param _value amount of tokens to be received.
      * @param _data additional transfer data passed from the other side.
      */
-    function handleBridgedTokensAndCall(
-        address _token,
-        address _recipient,
-        uint256 _value,
-        bytes memory _data
-    ) external onlyMediator {
+    function handleBridgedTokensAndCall(address _token, address _recipient, uint256 _value, bytes memory _data)
+        external
+        onlyMediator
+    {
         address token = bridgedTokenAddress(_token);
 
         require(isTokenRegistered(token));
@@ -155,11 +149,7 @@ abstract contract BasicOmnibridge is
      * @param _recipient address that will receive the tokens.
      * @param _value amount of tokens to be received.
      */
-    function handleNativeTokens(
-        address _token,
-        address _recipient,
-        uint256 _value
-    ) external onlyMediator {
+    function handleNativeTokens(address _token, address _recipient, uint256 _value) external onlyMediator {
         _ackBridgedTokenDeploy(_token);
 
         _handleTokens(_token, true, _recipient, _value);
@@ -174,12 +164,10 @@ abstract contract BasicOmnibridge is
      * @param _value amount of tokens to be received.
      * @param _data additional transfer data passed from the other side.
      */
-    function handleNativeTokensAndCall(
-        address _token,
-        address _recipient,
-        uint256 _value,
-        bytes memory _data
-    ) external onlyMediator {
+    function handleNativeTokensAndCall(address _token, address _recipient, uint256 _value, bytes memory _data)
+        external
+        onlyMediator
+    {
         _ackBridgedTokenDeploy(_token);
 
         _handleTokens(_token, true, _recipient, _value);
@@ -202,11 +190,7 @@ abstract contract BasicOmnibridge is
      * @param _recipient address that will receive the tokens.
      * @param _value amount of tokens to be received.
      */
-    function executeActionOnFixedTokens(
-        address _token,
-        address _recipient,
-        uint256 _value
-    ) internal override {
+    function executeActionOnFixedTokens(address _token, address _recipient, uint256 _value) internal override {
         _releaseTokens(nativeTokenAddress(_token) == address(0), _token, _recipient, _value, _value);
     }
 
@@ -281,11 +265,10 @@ abstract contract BasicOmnibridge is
      * @param _token address of the claimed token or address(0) for native coins.
      * @param _to address of the tokens/coins receiver.
      */
-    function claimTokensFromTokenContract(
-        address _bridgedToken,
-        address _token,
-        address _to
-    ) external onlyIfUpgradeabilityOwner {
+    function claimTokensFromTokenContract(address _bridgedToken, address _token, address _to)
+        external
+        onlyIfUpgradeabilityOwner
+    {
         IBurnableMintableERC677Token(_bridgedToken).claimTokens(_token, _to);
     }
 
@@ -297,12 +280,7 @@ abstract contract BasicOmnibridge is
      * @param _sender address of the tokens sender.
      * @param _value bridged value.
      */
-    function _recordBridgeOperation(
-        bytes32 _messageId,
-        address _token,
-        address _sender,
-        uint256 _value
-    ) internal {
+    function _recordBridgeOperation(bytes32 _messageId, address _token, address _sender, uint256 _value) internal {
         setMessageToken(_messageId, _token);
         setMessageRecipient(_messageId, _sender);
         setMessageValue(_messageId, _value);
@@ -333,16 +311,9 @@ abstract contract BasicOmnibridge is
 
             // process token which bridged alternative was already ACKed to be deployed
             if (isBridgedTokenDeployAcknowledged(_token)) {
-                return
-                    withData
-                        ? abi.encodeWithSelector(
-                            this.handleBridgedTokensAndCall.selector,
-                            _token,
-                            _receiver,
-                            _value,
-                            _data
-                        )
-                        : abi.encodeWithSelector(this.handleBridgedTokens.selector, _token, _receiver, _value);
+                return withData
+                    ? abi.encodeWithSelector(this.handleBridgedTokensAndCall.selector, _token, _receiver, _value, _data)
+                    : abi.encodeWithSelector(this.handleBridgedTokens.selector, _token, _receiver, _value);
             }
 
             uint8 decimals = TokenReader.readDecimals(_token);
@@ -351,41 +322,27 @@ abstract contract BasicOmnibridge is
 
             require(bytes(name).length > 0 || bytes(symbol).length > 0);
 
-            return
-                withData
-                    ? abi.encodeWithSelector(
-                        this.deployAndHandleBridgedTokensAndCall.selector,
-                        _token,
-                        name,
-                        symbol,
-                        decimals,
-                        _receiver,
-                        _value,
-                        _data
-                    )
-                    : abi.encodeWithSelector(
-                        this.deployAndHandleBridgedTokens.selector,
-                        _token,
-                        name,
-                        symbol,
-                        decimals,
-                        _receiver,
-                        _value
-                    );
-        }
-
-        // process already known token that is bridged from other chain
-        IBurnableMintableERC677Token(_token).burn(_value);
-        return
-            withData
+            return withData
                 ? abi.encodeWithSelector(
-                    this.handleNativeTokensAndCall.selector,
-                    _nativeToken,
+                    this.deployAndHandleBridgedTokensAndCall.selector,
+                    _token,
+                    name,
+                    symbol,
+                    decimals,
                     _receiver,
                     _value,
                     _data
                 )
-                : abi.encodeWithSelector(this.handleNativeTokens.selector, _nativeToken, _receiver, _value);
+                : abi.encodeWithSelector(
+                    this.deployAndHandleBridgedTokens.selector, _token, name, symbol, decimals, _receiver, _value
+                );
+        }
+
+        // process already known token that is bridged from other chain
+        IBurnableMintableERC677Token(_token).burn(_value);
+        return withData
+            ? abi.encodeWithSelector(this.handleNativeTokensAndCall.selector, _nativeToken, _receiver, _value, _data)
+            : abi.encodeWithSelector(this.handleNativeTokens.selector, _nativeToken, _receiver, _value);
     }
 
     /**
@@ -405,13 +362,10 @@ abstract contract BasicOmnibridge is
      * @param _value amount of tokens to unlock.
      * @param _balanceChange amount of balance to subtract from the mediator balance.
      */
-    function _releaseTokens(
-        bool _isNative,
-        address _token,
-        address _recipient,
-        uint256 _value,
-        uint256 _balanceChange
-    ) internal virtual {
+    function _releaseTokens(bool _isNative, address _token, address _recipient, uint256 _value, uint256 _balanceChange)
+        internal
+        virtual
+    {
         if (_isNative) {
             IERC677(_token).safeTransfer(_recipient, _value);
             _setMediatorBalance(_token, mediatorBalance(_token).sub(_balanceChange));
@@ -427,12 +381,10 @@ abstract contract BasicOmnibridge is
      * @param _symbol symbol of the bridged token, if empty, name will be used instead.
      * @param _decimals decimals of the bridge foreign token.
      */
-    function _getBridgedTokenOrDeploy(
-        address _token,
-        string calldata _name,
-        string calldata _symbol,
-        uint8 _decimals
-    ) internal returns (address) {
+    function _getBridgedTokenOrDeploy(address _token, string calldata _name, string calldata _symbol, uint8 _decimals)
+        internal
+        returns (address)
+    {
         address bridgedToken = bridgedTokenAddress(_token);
         if (bridgedToken == address(0)) {
             string memory name = _name;
@@ -461,14 +413,25 @@ abstract contract BasicOmnibridge is
      * @param _value amount of tokens transferred.
      * @param _data additional data passed to the callback.
      */
-    function _receiverCallback(
-        address _recipient,
-        address _token,
-        uint256 _value,
-        bytes memory _data
-    ) internal {
+    function _receiverCallback(address _recipient, address _token, uint256 _value, bytes memory _data) internal {
         if (Address.isContract(_recipient)) {
-            _recipient.call(abi.encodeWithSelector(IERC20Receiver.onTokenBridged.selector, _token, _value, _data));
+            uint256 gasBefore = gasleft();
+            (bool success,) =
+                _recipient.call(abi.encodeWithSelector(IERC20Receiver.onTokenBridged.selector, _token, _value, _data));
+            // EIP-150 caps the callee at 63/64 of gasBefore, so an out-of-gas callee leaves ~1/64.
+            // More than that means it reverted for its own reasons — keep the existing tolerance.
+            //
+            // The bound is gasBefore/63 rather than gasBefore/64 to leave a buffer. A callee that
+            // reverts on its own after burning nearly everything it was given also lands just above
+            // 1/64, so a /64 threshold would be decided by rounding noise. /63 puts a margin of
+            // gasBefore/(63*64), ~1.5% of the forwarded gas, between the two verdicts. The cost is
+            // that such a gas-burning self-revert is rejected alongside a genuine out-of-gas; both
+            // are indistinguishable from here and rejecting is the safe direction — the message
+            // stays replayable, or recoverable via requestFailedMessageFix, instead of settling
+            // with the tokens stranded in the receiver.
+            if (!success) {
+                require(gasleft() > gasBefore / 63, "callback out of gas");
+            }
         }
     }
 
@@ -496,10 +459,5 @@ abstract contract BasicOmnibridge is
         return IERC677(_token).balanceOf(address(this)).sub(mediatorBalance(_token));
     }
 
-    function _handleTokens(
-        address _token,
-        bool _isNative,
-        address _recipient,
-        uint256 _value
-    ) internal virtual;
+    function _handleTokens(address _token, bool _isNative, address _recipient, uint256 _value) internal virtual;
 }
