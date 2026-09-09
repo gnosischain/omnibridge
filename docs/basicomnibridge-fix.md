@@ -236,6 +236,42 @@ Test
 forge test --match-path foundry-tests/BasicOmnibridgeFix.t.sol --fork-url https://ethereum-rpc.publicnode.com
 ```
 
+# Verify
+
+[`verify.sh`](../verify.sh) checks the two implementations above for you. From a fresh clone:
+
+```
+./verify.sh
+```
+
+Expect this, with `MATCH` on both and exit code 0:
+
+```
+=== ForeignOmnibridge (Ethereum)  (0x00e7097e9c1ce7121fc466ff31a7c742d5a26ea2)
+  patching SUFFIX      @19913  " from xDai"
+  patching SUFFIX_SIZE @20046  10
+  local  : 23586 bytes  sha256(hex) f78beadad268c5747f5f25bac6f3e99b7857c20037b0586d91486897e5890529
+  onchain: 23586 bytes  sha256(hex) f78beadad268c5747f5f25bac6f3e99b7857c20037b0586d91486897e5890529
+  MATCH
+
+=== HomeOmnibridge (Gnosis)  (0x992685a4117a5c217f3a0e33f735565ad132b12a)
+  patching SUFFIX      @19722  " from Mainnet"
+  patching SUFFIX_SIZE @19855  13
+  local  : 24289 bytes  sha256(hex) 1a4fd4f2d1b16add488dcfaec3b86d829e80ec19de8fdea201f6730daeb66b90
+  onchain: 24289 bytes  sha256(hex) 1a4fd4f2d1b16add488dcfaec3b86d829e80ec19de8fdea201f6730daeb66b90
+  MATCH
+
+OK: both implementations match the local build.
+```
+
+The digest is over the `0x...` hex string, the same text the explorer and `out/*.json` show. To
+cross-check one by hand, note there must be no trailing newline:
+
+```
+printf '%s' "0x6080..." | sha256sum   # Linux
+printf '%s' "0x6080..." | shasum -a 256   # macOS
+```
+
 # Audit
 
 [Audit report](./audit-tokenbridge-callback-gas-fix.pdf), [source](https://github.com/cducrest/audit-reports/blob/main/tokenbridge-callback-gas-fix.pdf)
