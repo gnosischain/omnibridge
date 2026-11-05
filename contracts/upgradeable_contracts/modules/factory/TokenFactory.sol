@@ -9,6 +9,7 @@ import "../OwnableModule.sol";
  */
 contract TokenFactory is OwnableModule {
     address public tokenImage;
+    mapping(address => bool) public isDeployer;
 
     /**
      * @dev Initializes this contract
@@ -48,19 +49,74 @@ contract TokenFactory is OwnableModule {
     }
 
     /**
-     * @dev Deploys a new TokenProxy contract, using saved token image contract as a template.
+     * @dev Allows or disallows an address to deploy new tokens (normally the bridge mediator).
+     * Only owner can call this method.
+     * @param _deployer address of the deployer.
+     * @param _allowed true to allow, false to disallow.
+     */
+    function setDeployer(address _deployer, bool _allowed) external onlyOwner {
+        isDeployer[_deployer] = _allowed;
+    }
+
+    /**
+     * @dev Deploys a new TokenProxy contract with CREATE2, using saved token image contract as a template.
+     * The address depends only on this factory address and the source token address.
+     * Only allowed deployers can call this method. The caller becomes the token owner.
      * @param _name deployed token name.
      * @param _symbol deployed token symbol.
      * @param _decimals deployed token decimals.
      * @param _chainId chain id of the current environment.
-     * @return address of a newly created contract.
+     * @param _token address of the token on the source chain, used as the CREATE2 salt.
+     * @return tokenProxy address of a newly created contract.
      */
     function deploy(
         string calldata _name,
         string calldata _symbol,
         uint8 _decimals,
-        uint256 _chainId
-    ) external returns (address) {
-        return address(new TokenProxy(tokenImage, _name, _symbol, _decimals, _chainId, msg.sender));
+        uint256 _chainId,
+        address _token
+    ) external returns (address tokenProxy) {
+        require(isDeployer[msg.sender]);
+       
+        tokenProxy = _deployTokenProxy(_token);
+        TokenProxy(payable(tokenProxy)).initialize(tokenImage, _name, _symbol, _decimals, _chainId, msg.sender);
     }
+
+    /**
+     * @dev Tells the address at which the token proxy for the given source token is (or will be) deployed.
+     * @param _token address of the token on the source chain.
+     * @return address of the token proxy.
+     */
+    function predictTokenProxyAddress(address _token) external view returns (address) {
+        bytes32 hash =
+            keccak256(
+                abi.encodePacked(bytes1(0xff), address(this), _salt(_token), keccak256(type(TokenProxy).creationCode))
+            );
+        return address(uint160(uint256(hash)));
+    }
+
+    /**
+     * @dev Internal function for computing the CREATE2 salt from the source token address.
+     * @param _token address of the token on the source chain.
+     * @return CREATE2 salt.
+     */
+    function _salt(address _token) internal pure returns (bytes32) {
+        return bytes32(uint256(uint160(_token)));
+    }
+
+    function _deployTokenProxy(address _token) internal returns (address tokenProxy) {
+        bytes memory initCode = type(TokenProxy).creationCode;
+    bytes32 salt = bytes32(uint256(uint160(_token)));
+
+    assembly {
+        // bytes memory layout: [32-byte length][data...]
+        tokenProxy := create2(0, add(initCode, 0x20), mload(initCode), salt)
+
+        if iszero(tokenProxy) {
+            // bubble up the constructor's revert reason
+            let p := mload(0x40)
+            returndatacopy(p, 0, returndatasize())
+            revert(p, returndatasize())
+        }
+    }}
 }

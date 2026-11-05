@@ -197,6 +197,21 @@ abstract contract BasicOmnibridge is
     }
 
     /**
+     * @dev Tells the bridged token address for a native token from the other side of the bridge.
+     * Returns the registered address if the token was already bridged,
+     * otherwise the address at which the current token factory will deploy it.
+     * @param _nativeToken address of the native token contract on the other side.
+     * @return address of the bridged token contract on this side.
+     */
+    function bridgedTokenAddressOrPredicted(address _nativeToken) external view returns (address) {
+        address bridgedToken = bridgedTokenAddress(_nativeToken);
+        if (bridgedToken != address(0)) {
+            return bridgedToken;
+        }
+        return tokenFactory().predictTokenProxyAddress(_nativeToken);
+    }
+
+    /**
      * @dev Unlock back the amount of tokens that were bridged to the other network but failed.
      * @param _token address that bridged token contract.
      * @param _recipient address that will receive the tokens.
@@ -444,7 +459,7 @@ abstract contract BasicOmnibridge is
                 symbol = name;
             }
             name = _transformName(name);
-            bridgedToken = tokenFactory().deploy(name, symbol, _decimals, bridgeContract().sourceChainId());
+            bridgedToken = tokenFactory().deploy(name, symbol, _decimals, bridgeContract().sourceChainId(), _token);
             _setTokenAddressPair(_token, bridgedToken);
             _initializeTokenBridgeLimits(bridgedToken, _decimals);
         } else if (!isTokenRegistered(bridgedToken)) {
