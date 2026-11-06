@@ -9,3 +9,15 @@ deploy/*.env*
 deploy/bridgeDeploymentResults.json
 coverage.json
 e2e-tests/.env
+
+# Foundry
+out
+forge-cache
+broadcast/*/31337/
+broadcast/**/dry-run/
+broadcast/
+/cache/
+/.toolchain/
+
+# Tenderly VNets created by ci/tenderly-vnets.sh
+.tenderly-vnets.json

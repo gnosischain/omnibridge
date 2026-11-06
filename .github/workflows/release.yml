@@ -4,19 +4,18 @@ on:
   release:
     types: [created]
 
+permissions:
+  contents: write # upload the release asset
+
 jobs:
   flats:
     runs-on: ubuntu-latest
     steps:
-      - id: get_release
-        uses: bruceadams/get-release@v1.2.1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-      - uses: actions/setup-node@v1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 14
-      - uses: actions/checkout@v2
-      - uses: actions/cache@v2
+      - uses: actions/cache@v4
         id: yarn-cache
         with:
           path: node_modules
@@ -24,12 +23,12 @@ jobs:
       - run: yarn
         if: ${{ !steps.yarn-cache.outputs.cache-hit }}
       - run: yarn flatten
-      - run: zip flats $(find flats -name '*.sol')
-      - uses: actions/upload-release-asset@v1.0.2
+      - name: Zip flattened contracts
+        run: zip "omnibridge-contracts-flattened-${TAG}.zip" $(find flats -name '*.sol')
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: flats.zip
-          asset_name: omnibridge-contracts-flattened-${{ steps.get_release.outputs.tag_name }}.zip
-          asset_content_type: application/zip
+          TAG: ${{ github.event.release.tag_name }}
+      - name: Upload to the release
+        run: gh release upload "$TAG" "omnibridge-contracts-flattened-${TAG}.zip"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}

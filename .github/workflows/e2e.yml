@@ -1,0 +1,164 @@
+name: e2e
+
+# Foundry fork tests against fresh Tenderly Virtual TestNets of Ethereum and Gnosis Chain (see README.md).
+# The production AMBs are used as they are, with a mock validator added in the tests; no off-chain oracle runs.
+#
+#   e2e       new Omnibridge pair on top of the production AMBs (test-e2e/*To*.t.sol), on every run
+#   upgrade   upgrades the production Omnibridge proxies (test-e2e/Upgrade.t.sol), only when
+#             HomeOmnibridge/ForeignOmnibridge bytecode changed (ci/mediators-changed.sh) or when asked for
+#
+# Each job creates its own pair of VNets and deletes it at the end, even on failure.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      upgrade:
+        description: Run the upgrade test whether or not the mediators changed
+        type: boolean
+        default: false
+      fork_block_eth:
+        description: Ethereum block to fork from (default latest)
+        type: string
+        default: ''
+      fork_block_gc:
+        description: Gnosis Chain block to fork from (default latest)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FOUNDRY_PROFILE: e2e
+  TENDERLY_FORK_BLOCK_ETH: ${{ inputs.fork_block_eth }}
+  TENDERLY_FORK_BLOCK_GC: ${{ inputs.fork_block_gc }}
+
+jobs:
+  changes:
+    name: Did the mediators change?
+    # Pull requests from forks get no secrets, so the e2e tests cannot run for them.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      upgrade: ${{ steps.decide.outputs.upgrade }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 14
+      - uses: actions/cache@v4
+        id: yarn-cache
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node_modules-${{ hashFiles('**/yarn.lock') }}
+      - run: yarn # @openzeppelin/contracts is resolved from node_modules
+        if: ${{ !steps.yarn-cache.outputs.cache-hit }}
+      - uses: foundry-rs/foundry-toolchain@v1
+      - name: Compare mediator bytecode with the base commit
+        id: decide
+        env:
+          FOUNDRY_PROFILE: default
+          FORCE: ${{ inputs.upgrade }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            echo "upgrade=true" >> "$GITHUB_OUTPUT"
+          elif [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            # manual run without the flag, or first push of a branch: nothing to compare with
+            echo "upgrade=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "upgrade=$(ci/mediators-changed.sh "$BASE")" >> "$GITHUB_OUTPUT"
+          fi
+
+  e2e:
+    name: E2E (new Omnibridge on production AMBs)
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 14
+      - uses: actions/cache@v4
+        id: yarn-cache
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node_modules-${{ hashFiles('**/yarn.lock') }}
+      - run: yarn
+        if: ${{ !steps.yarn-cache.outputs.cache-hit }}
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Create Tenderly VNets
+        run: ci/tenderly-vnets.sh create
+        env:
+          TENDERLY_API_TOKEN: ${{ secrets.TENDERLY_API_TOKEN }}
+          TENDERLY_ACCOUNT_ID: ${{ secrets.TENDERLY_ACCOUNT_ID }}
+          TENDERLY_PROJECT: ${{ secrets.TENDERLY_PROJECT }}
+
+      - name: Run e2e tests
+        run: forge test --match-path 'test-e2e/*To*.t.sol' -vvv
+
+      - name: Delete Tenderly VNets
+        if: always()
+        run: ci/tenderly-vnets.sh delete
+        env:
+          TENDERLY_API_TOKEN: ${{ secrets.TENDERLY_API_TOKEN }}
+          TENDERLY_ACCOUNT_ID: ${{ secrets.TENDERLY_ACCOUNT_ID }}
+          TENDERLY_PROJECT: ${{ secrets.TENDERLY_PROJECT }}
+
+  upgrade:
+    name: E2E (upgrade production Omnibridge)
+    needs: changes
+    if: needs.changes.outputs.upgrade == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 14
+      - uses: actions/cache@v4
+        id: yarn-cache
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node_modules-${{ hashFiles('**/yarn.lock') }}
+      - run: yarn
+        if: ${{ !steps.yarn-cache.outputs.cache-hit }}
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Create Tenderly VNets
+        run: ci/tenderly-vnets.sh create
+        env:
+          TENDERLY_API_TOKEN: ${{ secrets.TENDERLY_API_TOKEN }}
+          TENDERLY_ACCOUNT_ID: ${{ secrets.TENDERLY_ACCOUNT_ID }}
+          TENDERLY_PROJECT: ${{ secrets.TENDERLY_PROJECT }}
+
+      - name: Run upgrade tests
+        run: forge test --match-path 'test-e2e/Upgrade.t.sol' -vvv
+
+      - name: Delete Tenderly VNets
+        if: always()
+        run: ci/tenderly-vnets.sh delete
+        env:
+          TENDERLY_API_TOKEN: ${{ secrets.TENDERLY_API_TOKEN }}
+          TENDERLY_ACCOUNT_ID: ${{ secrets.TENDERLY_ACCOUNT_ID }}
+          TENDERLY_PROJECT: ${{ secrets.TENDERLY_PROJECT }}
