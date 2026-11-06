@@ -28,3 +28,10 @@ fs_permissions = [{ access = "read", path = "./precompiled" }]
 
 [fmt]
 line_length = 120
+remappings = [
+    "forge-std/=lib/forge-std/src/",
+    "ds-test/=lib/forge-std/lib/ds-test/src/",
+    "@openzeppelin/=node_modules/@openzeppelin/",
+]
+
+
