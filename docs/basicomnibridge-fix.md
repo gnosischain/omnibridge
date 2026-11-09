@@ -4,7 +4,11 @@ Source: [`contracts/upgradeable_contracts/BasicOmnibridge.sol`](../contracts/upg
 
 > A permissionless relayer could choose a gas limit that lets a WETH claim settle while starving the
 > unwrap callback, leaving WETH stranded in [`WETHOmnibridgeRouter`](../contracts/helpers/WETHOmnibridgeRouter.sol)
-> and the recipient with nothing. Fixed by detecting callback gas starvation via the EIP-150 63/64 rule.
+> and the recipient with nothing. The first proposed gas-left check misses nested out-of-gas;
+> the revised source requires the Ethereum WETH router callback to succeed.
+
+**Deployment warning:** The implementation addresses and bytecode below describe the first proposal.
+They do not contain the revised router success check and will not match a build of the current source.
 
 ## Affected path
 
@@ -40,10 +44,9 @@ Three properties combine into an exploitable grief:
    router by the time `onTokenBridged` is invoked, so a failed callback leaves a half-completed claim rather than no claim.
 2. **The result is discarded**, so an out-of-gas callback is indistinguishable from success. The outer
    `handleNativeTokensAndCall` returns normally and the AMB marks the message executed.
-3. **The caller picks the gas.** `executeSignatures` and `safeExecuteSignaturesWith*` are permissionless — the signatures
-   authorise the claim, not the sender — so _anyone_ can relay a validly signed message with a gas
-   limit of their choosing. `safeExecuteSignaturesWithGasLimit(data, sigs, _gas)` takes `_gas`
-   directly; plain `executeSignatures` takes it from the message header.
+3. **The caller can pick gas on one AMB entry point.** Valid signatures authorise the claim, not
+   the relayer. `safeExecuteSignaturesWithGasLimit(data, sigs, _gas)` accepts a caller-supplied `_gas`.
+   Plain `executeSignatures` uses the signed message header; a relayer cannot change that header.
 
 EIP-150 gives the callback at most 63/64 of the gas remaining when it is invoked, so a relayer who
 forwards enough for `_handleTokens` but not for `_handleTokens` + `onTokenBridged` lands in a window
@@ -63,28 +66,26 @@ deployed implementation `0x8eB3b7D8498a6716904577b2579e1c313d48E347`:
 ## Impact
 
 WETH equal to the claim amount is left in the router, and the recipient receives nothing. The router
-holds no per-user accounting, so the funds are not attributable or withdrawable by the intended owner.
+holds no per-user accounting or user withdrawal method. Its owner can withdraw the balance, but
+returning it to the correct users requires offchain attribution.
 
 Severity depends on the relay entry point:
 
-| entry point                             | attacker controls the gas via | result before the fix                                             |
-| --------------------------------------- | ----------------------------- | ----------------------------------------------------------------- |
-| `safeExecuteSignaturesWithGasLimit`     | the `_gas` argument           | WETH stranded; message consumed                                   |
-| `executeSignatures`                     | the message header `gasLimit` | WETH stranded **and** the AMB records `messageCallStatus == true` |
-| `safeExecuteSignaturesWithAutoGasLimit` | —                             | **not exploitable** (see below)                                   |
+| entry point                             | execution gas comes from       | observed result before the fix                                      |
+| --------------------------------------- | ------------------------------ | ------------------------------------------------------------------- |
+| `safeExecuteSignaturesWithGasLimit`     | caller-supplied `_gas`         | WETH stranded; message consumed                                     |
+| `executeSignatures`                     | signed message header         | low signed gas can strand WETH with `messageCallStatus == true`     |
+| `safeExecuteSignaturesWithAutoGasLimit` | remaining transaction gas      | no grief in the tested transaction-gas sweep                        |
 
-The second row is the worse one. `FailedMessagesProcessor.requestFailedMessageFix` requires
-`!bridge.messageCallStatus(_messageId)`, so a message recorded as successful cannot be rolled back on
-the Home side. There is no recovery path.
+`FailedMessagesProcessor.requestFailedMessageFix` requires `!bridge.messageCallStatus(_messageId)`,
+so a message recorded as successful cannot use the bridge's failed-message rollback. Router-owner
+recovery remains possible.
 
-`safeExecuteSignaturesWithAutoGasLimit` is structurally immune, before and after the fix. It forwards
-`0xffffffff`, so EIP-150 gives the mediator 63/64 of the remaining gas and the AMB retains only 1/64.
-For the AMB to have enough left to finish its own bookkeeping, the mediator must have received about
-63× that — always far above the grief band. The outcome is therefore binary: the whole transaction
-reverts, or the claim completes correctly. Confirmed by sweeping the transaction gas budget from
-200,000 to 3,000,000: zero grief windows, first success at 275,000.
+`safeExecuteSignaturesWithAutoGasLimit` forwards `0xffffffff`. A sweep of the transaction gas
+budget from 200,000 to 3,000,000 in the mainnet-fork test found no grief window and first succeeded
+at 275,000. This is a result for that test state, not a general proof for every recipient or gas cost.
 
-## Fix
+## First proposed fix (incomplete)
 
 ```solidity
 function _receiverCallback(
@@ -107,50 +108,53 @@ function _receiverCallback(
 
 ```
 
-The check does not ask _"was there enough gas"_ — it asks _"did the callee burn everything it was
-given"_, which is the EIP-150 signature of starvation:
-
-- a callee that runs out consumes the full 63/64 it received, leaving ≈ `gasBefore / 64`, which is
-  strictly less than `gasBefore / 63` → **revert**;
-- a callee that reverts on its own returns the unspent remainder, leaving far more → **tolerated**,
-  exactly as before.
+The check estimates whether the direct recipient call exhausted its forwarded gas. It does not
+establish that nested calls completed. A nested `WETH.withdraw` can run out of gas; the router then
+reverts but returns gas reserved at the nested call. The mediator can pass the `/63` check while
+committing its earlier WETH transfer to the router.
 
 ### Why the bound is `/63` and not `/64`
 
-A non-starved callee is only guaranteed to leave _more_ than `gasBefore / 64` — the amount EIP-150
-withheld from it — and one that reverts on its own after burning nearly everything it was given
-leaves just barely more. So the two verdicts sit this close together:
+Let `B = gasBefore` and `g` be gas available **at the CALL after ABI encoding and CALL upfront costs**.
+This call requests all remaining gas, so EIP-150 forwards `g - floor(g / 64)` and retains
+`floor(g / 64)` in the mediator. If the direct callee consumes all forwarded gas, the later
+`gasleft()` is roughly `floor(g / 64)` minus post-call costs. Since `g < B`, `B / 64` is not the
+actual reserve.
 
+The integer thresholds differ by `floor(B / 63) - floor(B / 64)`. At `B = 100,000`, they are
+1,587 and 1,562 gas, a 25-gas gap (0.025% of `B`, about 1.6% of the reserve). It is a heuristic, not an
+exact classifier of failure reasons. Nested calls retain their own gas reserves, and intentional
+reverts can leave arbitrarily little gas. No divisor distinguishes those cases reliably.
+
+### Revised guard
+
+The current source keeps the heuristic for other receivers but requires success from the known
+Ethereum WETH router:
+
+```solidity
+if (!success) {
+  require(_recipient != ETH_WETH_ROUTER, "router callback failed");
+  require(gasleft() > gasBefore / 63, "callback out of gas");
+}
 ```
-     gasBefore/64          gasBefore/63                                gasBefore
- ─────────┼───────────────────┼──────────────────────────────────────────────
-          ^ out-of-gas lands  ^ threshold
-          └──── reject ───────┴──────────────── accept ──────────────────────
-```
 
-A `gasleft() > gasBefore / 64` threshold would be decided by rounding noise — the two cases can
-differ by a single gas unit. `/63` inserts a margin of `gasBefore / (63 * 64)`, about **1.5% of the
-forwarded gas**, between them.
+For that router, any failed unwrap or ETH send reverts the mediator call and rolls back the WETH
+transfer. This does not guarantee atomic callbacks for other recipient contracts.
 
-The cost is a false positive: a callee that deliberately burns its whole allowance and then reverts
-(a gas-burning loop, or an `assert`/invalid-opcode revert) is rejected alongside a genuine
-out-of-gas. From inside `_receiverCallback` the two are indistinguishable, and rejecting is the safe
-direction — the message stays replayable, or recoverable via `requestFailedMessageFix`, instead of
-settling with the tokens stranded in the receiver.
+### Behaviour for the Ethereum WETH router with the revised guard
 
-Placing it in `BasicOmnibridge` covers both `ForeignOmnibridge` and `HomeOmnibridge`, and every
-`*AndCall` entry point, in one place.
+| entry point                         | failed router callback                                              | successful router callback |
+| ----------------------------------- | ------------------------------------------------------------------- | -------------------------- |
+| `safeExecuteSignaturesWithGasLimit` | transaction reverts; message stays replayable                       | settles normally           |
+| `executeSignatures`                | recorded as failed; a failed-message fix can be requested from Home | settles normally           |
 
-### Behaviour after the fix
+Other receivers retain the first proposal's best-effort callback behavior and its limitations.
 
-| entry point              | starved relay                                                                                      | honest relay     |
-| ------------------------ | -------------------------------------------------------------------------------------------------- | ---------------- |
-| `safeExecuteSignatures*` | whole transaction reverts; message stays replayable                                                | settles normally |
-| `executeSignatures`      | recorded as a **failed** message; `requestFailedMessageFix` rolls the tokens back on the Home side | settles normally |
+# Historical upgrade proposal
 
-Either way the user's funds survive.
-
-# Upgrade
+The following implementation addresses and bytecode are for the incomplete first proposal.
+The known Ethereum route requires a new ForeignOmnibridge implementation and bytecode verification;
+it does not itself require upgrading HomeOmnibridge.
 
 1. Proxy contracts upgrade:
    1. ForeignOmnibridge: Proxy contract`0x88ad09518695c6c3712AC10a214bE5109a655671` `upgradeTo(7,0x00e7097e9c1ce7121fc466ff31a7c742d5a26ea2)`
@@ -233,12 +237,14 @@ forge build
 Test
 
 ```
-forge test --match-path foundry-tests/BasicOmnibridgeFix.t.sol --fork-url https://ethereum-rpc.publicnode.com
+forge test --fork-url https://ethereum-rpc.publicnode.com
 ```
 
-# Verify
+# Verify the historical candidate
 
-[`verify.sh`](../verify.sh) checks the two implementations above for you. From a fresh clone:
+[`verify.sh`](../verify.sh) was written for the two implementations above. It will report a mismatch
+against the revised source; the output below is the expected result only for the historical candidate.
+From a checkout of that candidate:
 
 ```
 ./verify.sh

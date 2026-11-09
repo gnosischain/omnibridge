@@ -42,6 +42,7 @@ abstract contract BasicOmnibridge is
     // Workaround for storing variable up-to-32 bytes suffix
     uint256 private immutable SUFFIX_SIZE;
     bytes32 private immutable SUFFIX;
+    address private constant ETH_WETH_ROUTER = 0xa6439Ca0FCbA1d0F80df0bE6A17220feD9c9038a;
 
     // Since contract is intended to be deployed under EternalStorageProxy, only constant and immutable variables can be set here
     constructor(string memory _suffix) {
@@ -418,18 +419,12 @@ abstract contract BasicOmnibridge is
             uint256 gasBefore = gasleft();
             (bool success,) =
                 _recipient.call(abi.encodeWithSelector(IERC20Receiver.onTokenBridged.selector, _token, _value, _data));
-            // EIP-150 caps the callee at 63/64 of gasBefore, so an out-of-gas callee leaves ~1/64.
-            // More than that means it reverted for its own reasons — keep the existing tolerance.
-            //
-            // The bound is gasBefore/63 rather than gasBefore/64 to leave a buffer. A callee that
-            // reverts on its own after burning nearly everything it was given also lands just above
-            // 1/64, so a /64 threshold would be decided by rounding noise. /63 puts a margin of
-            // gasBefore/(63*64), ~1.5% of the forwarded gas, between the two verdicts. The cost is
-            // that such a gas-burning self-revert is rejected alongside a genuine out-of-gas; both
-            // are indistinguishable from here and rejecting is the safe direction — the message
-            // stays replayable, or recoverable via requestFailedMessageFix, instead of settling
-            // with the tokens stranded in the receiver.
             if (!success) {
+                // Nested out-of-gas can return enough gas to pass the heuristic below.
+                // The Ethereum WETH router must finish unwrapping and forwarding ETH.
+                require(_recipient != ETH_WETH_ROUTER, "router callback failed");
+                // Preserve best-effort callbacks elsewhere unless nearly all forwarded gas was spent.
+                // gasBefore precedes ABI encoding and CALL costs, so /63 is a heuristic, not an exact bound.
                 require(gasleft() > gasBefore / 63, "callback out of gas");
             }
         }
