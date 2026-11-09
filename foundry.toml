@@ -1,17 +1,42 @@
+# Foundry config. Runs side by side with Truffle (truffle-config.js); both compile the same contracts/.
+# Compiler settings match truffle-config.js and the deployed Omnibridge contracts.
+
 [profile.default]
 src = "contracts"
-test = "foundry-tests"
-script = "foundry-scripts"
+test = "test-foundry"     # not test/: Truffle runs every .sol file under test/ as a Solidity test
+script = "script"
 out = "out"
 cache_path = "forge-cache"
-libs = ["lib"]
+libs = ["lib", "node_modules"]
 
-# Match truffle-config.js compiler settings
 solc_version = "0.7.5"
 optimizer = true
 optimizer_runs = 200
 evm_version = "istanbul"
 
+# contracts/helpers/WETHOmnibridgeRouter.sol does not compile (IOmnibridge has no relayTokensAndCall).
+# Skipped until that file is fixed; remove this line afterwards.
+skip = ["contracts/helpers/WETHOmnibridgeRouter.sol"]
+
+remappings = [
+  "@openzeppelin/=node_modules/@openzeppelin/",
+  "forge-std/=lib/forge-std/src/",
+]
+
+# Tests read the precompiled PermittableToken (solc 0.4.24) artifact
+fs_permissions = [{ access = "read", path = "./precompiled" }]
+
+# E2E fork tests against Ethereum and Gnosis Chain (test-e2e/, see README.md).
+# Needs FOREIGN_RPC_URL (Ethereum) and HOME_RPC_URL (Gnosis Chain):
+#   FOUNDRY_PROFILE=e2e forge test
+# evm_version only sets the EVM the forks run on. solc 0.7.5 still compiles for istanbul,
+# but the production contracts reached from the AMBs (e.g. Hashi) need a recent EVM.
+[profile.e2e]
+test = "test-e2e"
+evm_version = "cancun"
+
+[fmt]
+line_length = 120
 remappings = [
     "forge-std/=lib/forge-std/src/",
     "ds-test/=lib/forge-std/lib/ds-test/src/",
