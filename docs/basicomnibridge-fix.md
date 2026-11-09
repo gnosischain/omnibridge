@@ -233,7 +233,7 @@ forge build
 Test
 
 ```
-forge test --match-path foundry-tests/BasicOmnibridgeFix.t.sol --fork-url https://ethereum-rpc.publicnode.com
+FOUNDRY_PROFILE=e2e forge test --match-path test-e2e/BasicOmnibridgeFix.t.sol --fork-url https://ethereum-rpc.publicnode.com
 ```
 
 # Verify

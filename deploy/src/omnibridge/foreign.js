@@ -1,5 +1,5 @@
 const { web3Foreign, deploymentAddress } = require('../web3')
-const { deployContract, upgradeProxy } = require('../deploymentUtils')
+const { deployContract, upgradeProxy, transferOwnership, allowTokenFactoryDeployer } = require('../deploymentUtils')
 const { EternalStorageProxy, ForeignOmnibridge, PermittableToken, TokenFactory } = require('../loadContracts')
 const {
   FOREIGN_TOKEN_FACTORY,
@@ -34,14 +34,29 @@ async function deployForeign() {
       console.log('\n[Foreign] Using existing ERC677 token image: ', foreignTokenImage)
     }
     console.log('\n[Foreign] Deploying new token factory')
-    const factory = await deployContract(TokenFactory, [FOREIGN_BRIDGE_OWNER, foreignTokenImage], {
+    // Owned by the deployment account first, so it can allow the mediator, then handed to the bridge owner
+    const factory = await deployContract(TokenFactory, [deploymentAddress, foreignTokenImage], {
       network: 'foreign',
       nonce: nonce++,
     })
     tokenFactory = factory.options.address
     console.log('\n[Foreign] New token factory has been deployed: ', tokenFactory)
+    nonce = await allowTokenFactoryDeployer({
+      factory,
+      mediator: foreignBridgeStorage.options.address,
+      nonce,
+      network: 'foreign',
+    })
+    await transferOwnership({ contract: factory, newOwner: FOREIGN_BRIDGE_OWNER, nonce: nonce++, network: 'foreign' })
   } else {
     console.log('\n[Foreign] Using existing token factory: ', tokenFactory)
+    const factory = new web3Foreign.eth.Contract(TokenFactory.abi, tokenFactory)
+    nonce = await allowTokenFactoryDeployer({
+      factory,
+      mediator: foreignBridgeStorage.options.address,
+      nonce,
+      network: 'foreign',
+    })
   }
 
   console.log('\n[Foreign] Deploying Bridge Mediator implementation with the following parameters:')
