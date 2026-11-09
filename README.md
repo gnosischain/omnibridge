@@ -23,6 +23,9 @@ forge test -vvv                           # Solidity tests in test-foundry/; or:
 forge coverage --report summary           # or: yarn forge:coverage
 ```
 
+`test-foundry/omnibridge/` is a port of the JS tests in `test/omnibridge/common.test.js`, except the Compound and
+AAVE connector tests, which need the docker test chain.
+
 `contracts/helpers/WETHOmnibridgeRouter.sol` does not compile (it calls `relayTokensAndCall`, which `IOmnibridge` lacks),
 so `foundry.toml` skips it.
 
@@ -51,6 +54,27 @@ Notes:
 - Fees (`HOME_TRANSACTIONS_FEE`, `FOREIGN_TRANSACTIONS_FEE`) are read as decimals, like `deploy.js`.
 - Use one token factory per mediator (different `TOKEN_FACTORY_SALT`): the bridged token address depends only on the
   factory and the source token address.
+
+### E2E tests
+
+`test-e2e/` holds Foundry fork tests that fork Ethereum and Gnosis Chain in the same test and use the production
+AMB contracts (`0x4C36…E64e` on Ethereum, `0x75Df…bb59` on Gnosis Chain). Each test adds a mock validator to the AMB
+validator contracts with the threshold set to 1, and carries the messages between the chains itself, so no off-chain
+oracle is needed.
+
+| File | What it tests |
+| --- | --- |
+| `ForeignToHome.t.sol`, `HomeToForeign.t.sol` | A new Omnibridge pair on top of the production AMBs: first and repeated bridging, `relayTokensAndCall`, bridging back, fixing a failed message, limits. |
+| `Upgrade.t.sol` | Upgrades the production Omnibridge proxies (`0x88ad…5671` on Ethereum, `0xf6A7…268d` on Gnosis Chain), checks the stored state is unchanged, then bridges both ways. |
+
+```bash
+FOREIGN_RPC_URL=<Ethereum RPC> HOME_RPC_URL=<Gnosis Chain RPC> FOUNDRY_PROFILE=e2e forge test
+```
+
+In CI (`.github/workflows/e2e.yml`), `ci/tenderly-vnets.sh` creates a Tenderly Virtual TestNet for each chain
+and deletes them at the end. It needs the `TENDERLY_API_TOKEN`, `TENDERLY_ACCOUNT_ID` and `TENDERLY_PROJECT` secrets.
+The upgrade test only runs when `ci/mediators-changed.sh` finds that the `HomeOmnibridge` or `ForeignOmnibridge`
+bytecode differs from the base commit, or when the workflow is started by hand with `upgrade` ticked.
 
 ## License
 
