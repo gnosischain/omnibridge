@@ -16,6 +16,10 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
     using SafeMint for IBurnableMintableERC677Token;
     using SafeMath for uint256;
 
+    // WETHOmnibridgeRouter on Ethereum mainnet. It unwraps bridged WETH and forwards ETH in its
+    // onTokenBridged callback, so that callback must not be allowed to fail silently.
+    address internal constant WETH_OMNIBRIDGE_ROUTER = 0xa6439Ca0FCbA1d0F80df0bE6A17220feD9c9038a;
+
     constructor(string memory _suffix) BasicOmnibridge(_suffix) {}
 
     /**
@@ -158,13 +162,10 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
      * @param _value amount of tokens to unlock.
      * @param _balanceChange amount of balance to subtract from the mediator balance.
      */
-    function _releaseTokens(
-        bool _isNative,
-        address _token,
-        address _recipient,
-        uint256 _value,
-        uint256 _balanceChange
-    ) internal override {
+    function _releaseTokens(bool _isNative, address _token, address _recipient, uint256 _value, uint256 _balanceChange)
+        internal
+        override
+    {
         if (_isNative) {
             // There are two edge cases related to withdrawals on the foreign side of the bridge.
             // 1) Minting of extra STAKE tokens, if supply on the Home side exceeds total bridge amount on the Foreign side.
@@ -200,6 +201,25 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
             IERC677(_token).safeTransfer(_recipient, _value);
         } else {
             _getMinterFor(_token).safeMint(_recipient, _value);
+        }
+    }
+
+    /**
+     * @dev Same as BasicOmnibridge, except that a failed callback on the WETH router reverts the whole
+     * message. Otherwise a relayer could starve the callback of gas and leave the WETH stuck in the router.
+     * A reverted message stays recoverable through requestFailedMessageFix.
+     */
+    function _receiverCallback(address _recipient, address _token, uint256 _value, bytes memory _data)
+        internal
+        override
+    {
+        if (_recipient == WETH_OMNIBRIDGE_ROUTER) {
+            (bool success, ) = _recipient.call(
+                abi.encodeWithSelector(IERC20Receiver.onTokenBridged.selector, _token, _value, _data)
+            );
+            require(success, "WETH router callback failed");
+        } else {
+            super._receiverCallback(_recipient, _token, _value, _data);
         }
     }
 

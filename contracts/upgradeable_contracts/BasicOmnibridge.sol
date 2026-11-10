@@ -423,29 +423,27 @@ abstract contract BasicOmnibridge is
 
     /**
      * Notifies receiving contract about the completed bridging operation.
+     * A failed callback does not revert the transfer: the tokens stay with the recipient and
+     * ReceiverCallbackFailed is emitted.
      * @param _recipient address of the tokens receiver.
      * @param _token address of the bridged token.
      * @param _value amount of tokens transferred.
      * @param _data additional data passed to the callback.
      */
-    function _receiverCallback(address _recipient, address _token, uint256 _value, bytes memory _data) internal {
+    function _receiverCallback(address _recipient, address _token, uint256 _value, bytes memory _data)
+        internal
+        virtual
+    {
         if (Address.isContract(_recipient)) {
-            uint256 gasBefore = gasleft();
-            (bool success,) =
-                _recipient.call(abi.encodeWithSelector(IERC20Receiver.onTokenBridged.selector, _token, _value, _data));
-            // EIP-150 caps the callee at 63/64 of gasBefore, so an out-of-gas callee leaves ~1/64.
-            // More than that means it reverted for its own reasons — keep the existing tolerance.
-            //
-            // The bound is gasBefore/63 rather than gasBefore/64 to leave a buffer. A callee that
-            // reverts on its own after burning nearly everything it was given also lands just above
-            // 1/64, so a /64 threshold would be decided by rounding noise. /63 puts a margin of
-            // gasBefore/(63*64), ~1.5% of the forwarded gas, between the two verdicts. The cost is
-            // that such a gas-burning self-revert is rejected alongside a genuine out-of-gas; both
-            // are indistinguishable from here and rejecting is the safe direction — the message
-            // stays replayable, or recoverable via requestFailedMessageFix, instead of settling
-            // with the tokens stranded in the receiver.
+            (bool success,) = _recipient.call(
+                abi.encodeWithSelector(IERC20Receiver.onTokenBridged.selector, _token, _value, _data)
+            );
             if (!success) {
-                require(gasleft() > gasBefore / 63, "callback out of gas");
+                // Do not revert, to keep the original behaviour: the tokens stay with the recipient.
+                // The callback can fail because the recipient has no onTokenBridged and no accepting
+                // fallback (e.g. a Safe with CompatibilityFallbackHandler), because it reverted, or
+                // because it ran out of gas.
+                emit ReceiverCallbackFailed(_recipient, _token, _value, messageId());
             }
         }
     }
