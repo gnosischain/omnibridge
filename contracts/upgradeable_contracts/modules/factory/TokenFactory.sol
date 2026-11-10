@@ -62,6 +62,7 @@ contract TokenFactory is OwnableModule {
      * @dev Deploys a new TokenProxy contract with CREATE2, using saved token image contract as a template.
      * The address depends only on this factory address and the source token address.
      * Only allowed deployers can call this method. The caller becomes the token owner.
+     * In production, a bridge mediator contract deploy a token proxy for a token from the source chain and be the token owner.
      * @param _name deployed token name.
      * @param _symbol deployed token symbol.
      * @param _decimals deployed token decimals.
@@ -76,8 +77,7 @@ contract TokenFactory is OwnableModule {
         uint256 _chainId,
         address _token
     ) external returns (address tokenProxy) {
-        require(isDeployer[msg.sender]);
-       
+        require(isDeployer[msg.sender],"TokenFactory: Not a deployer");
         tokenProxy = _deployTokenProxy(_token);
         TokenProxy(payable(tokenProxy)).initialize(tokenImage, _name, _symbol, _decimals, _chainId, msg.sender);
     }
@@ -106,17 +106,17 @@ contract TokenFactory is OwnableModule {
 
     function _deployTokenProxy(address _token) internal returns (address tokenProxy) {
         bytes memory initCode = type(TokenProxy).creationCode;
-    bytes32 salt = bytes32(uint256(uint160(_token)));
+        bytes32 salt = _salt(_token);
 
-    assembly {
-        // bytes memory layout: [32-byte length][data...]
-        tokenProxy := create2(0, add(initCode, 0x20), mload(initCode), salt)
+        assembly {
+            // bytes memory layout: [32-byte length][data...]
+            tokenProxy := create2(0, add(initCode, 0x20), mload(initCode), salt)
 
-        if iszero(tokenProxy) {
-            // bubble up the constructor's revert reason
-            let p := mload(0x40)
-            returndatacopy(p, 0, returndatasize())
-            revert(p, returndatasize())
-        }
-    }}
+            if iszero(tokenProxy) {
+                // bubble up the constructor's revert reason
+                let p := mload(0x40)
+                returndatacopy(p, 0, returndatasize())
+                revert(p, returndatasize())
+            }
+        }}
 }

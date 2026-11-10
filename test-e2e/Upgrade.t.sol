@@ -5,8 +5,8 @@ import "./base/E2EBase.sol";
 
 /**
  * @dev Upgrades the production Omnibridge proxies to the implementation in this repo, the same way
- * script/UpgradeOmnibridge.s.sol does (new implementation, upgradeTo), checks that the stored state
- * is unchanged, then bridges through the upgraded production pair.
+ * script/UpgradeOmnibridge.s.sol does (new implementation, upgradeTo), switches to a new CREATE2 TokenFactory,
+ * checks that the stored state is unchanged, then bridges through the upgraded production pair.
  */
 contract UpgradeE2ETest is E2EBase {
     address internal constant WETH_ETHEREUM = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
@@ -42,9 +42,29 @@ contract UpgradeE2ETest is E2EBase {
         assertEq(proxy.implementation(), implementation);
         assertEq(proxy.version(), newVersion);
         assertEq(address(mediator.tokenFactory()), factory);
+
+        // The new implementation calls the 5 argument deploy, so switch to a CREATE2 factory that allows the mediator.
+        address bridgeOwner_ = mediator.owner();
+        TokenFactory newFactory = new TokenFactory(bridgeOwner_, TokenFactory(factory).tokenImage());
+        vm.startPrank(bridgeOwner_);
+        newFactory.setDeployer(_proxy, true);
+        mediator.setTokenFactory(address(newFactory));
+        vm.stopPrank();
+        assertEq(address(mediator.tokenFactory()), address(newFactory));
+    }
+
+    // Step 3 of the upgrade procedure: Gnosis -> Ethereum deploy messages need more than the default 600k.
+    function _raiseDeployGasLimits() internal {
+        vm.selectFork(homeFork);
+        SelectorTokenGasLimitManager manager = SelectorTokenGasLimitManager(address(homeMediator.gasLimitManager()));
+        vm.startPrank(manager.owner());
+        manager.setRequestGasLimit(bytes4(0x2ae87cdd), 850000); // deployAndHandleBridgedTokens
+        manager.setRequestGasLimit(bytes4(0xd522cfd7), 850000); // deployAndHandleBridgedTokensAndCall
+        vm.stopPrank();
     }
 
     function _upgradeBoth() internal {
+        _raiseDeployGasLimits();
         _upgrade(foreignFork, FOREIGN_OMNIBRIDGE, false);
         _upgrade(homeFork, HOME_OMNIBRIDGE, true);
         _clearMessages();

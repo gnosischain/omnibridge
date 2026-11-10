@@ -100,12 +100,12 @@ Ethereum messages.
 Do this on each chain (Ethereum: ForeignOmnibridge `0x88ad09518695c6c3712AC10a214bE5109a655671`; Gnosis:
 HomeOmnibridge `0xf6A78083ca3e2a662D6dd1703c939c8aCE2e268d`).
 
-| #   | Who                                                                              | Call                                                                                                                                  | Notes                                                                                                                                                                                                                                                        |
-| --- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | Any deployer                                                                     | `DeployTokenFactory.s.sol` (EIP-7997 deploy, `setTokenImage(image)`, `setDeployer(mediator, true)`, `transferOwnership(bridgeOwner)`) | Reuse the existing token image (`PermittableToken`) of the chain. Same deployer + `TOKEN_FACTORY_SALT` gives the same factory address on both chains.                                                                                                        |
-| 2   | Any deployer                                                                     | Deploy the new `HomeOmnibridge(suffix)` (Gnosis) / `ForeignOmnibridge(suffix)` (Ethereum) implementation                              | Use the same name suffix as the live implementation (check the name of an existing bridged token). `UpgradeOmnibridge.s.sol` does this and does or prints the `upgradeTo` call of step 4. It does not handle `setTokenFactory`: add it to the batch by hand. |
-| 3   | Gas limit manager owner (Gnosis, `0x68A3674028a785A8BCE19bA81B9ab7c9942BA3ED`)   | `setRequestGasLimit(0x2ae87cdd, gas)` and `setRequestGasLimit(0xd522cfd7, gas)`, gas ≥ 1,000,000 (suggested)                          | Selectors of `deployAndHandleBridgedTokens` and `deployAndHandleBridgedTokensAndCall`. Do this before upgrading the Ethereum side: the new deploy path needs ~689k, above the 600k default. Ethereum -> Gnosis messages already get 2,000,000.               |
-| 4   | Proxy upgradeability owner **and** bridge owner, in **one Safe MultiSend batch** | `proxy.upgradeTo(version() + 1, newImplementation)` then `mediator.setTokenFactory(newFactory)`                                       | Order matters: the old implementation calls `deploy` with 4 arguments and would fail against the new factory. `setTokenFactory` is `onlyOwner`, so it cannot go through `upgradeToAndCall`.                                                                  |
+| #   | Who                                                                              | Call                                                                                                                                  | Notes                                                                                                                                                                                                                                                                                                         |
+| --- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Any deployer                                                                     | `DeployTokenFactory.s.sol` (EIP-7997 deploy, `setTokenImage(image)`, `setDeployer(mediator, true)`, `transferOwnership(bridgeOwner)`) | Reuse the existing token image (`PermittableToken`) of the chain. Same deployer + `TOKEN_FACTORY_SALT` gives the same factory address on both chains.                                                                                                                                                         |
+| 2   | Any deployer                                                                     | Deploy the new `HomeOmnibridge(suffix)` (Gnosis) / `ForeignOmnibridge(suffix)` (Ethereum) implementation                              | Use the same name suffix as the live implementation (check the name of an existing bridged token). `UpgradeOmnibridge.s.sol` does this and does or prints the `upgradeTo` call of step 4. It does not handle `setTokenFactory`: add it to the batch by hand.                                                  |
+| 3   | Gas limit manager owner (Gnosis, `0x68A3674028a785A8BCE19bA81B9ab7c9942BA3ED`)   | `setRequestGasLimit(0x2ae87cdd, 850000)` and `setRequestGasLimit(0xd522cfd7, 850000)`                                                 | Selectors of `deployAndHandleBridgedTokens` and `deployAndHandleBridgedTokensAndCall`. Do this before upgrading the Ethereum side: the new deploy path needs ~751k, above the current 600k. Ethereum -> Gnosis messages already get 2,000,000. See [Gas limit update rationale](#gas-limit-update-rationale). |
+| 4   | Proxy upgradeability owner **and** bridge owner, in **one Safe MultiSend batch** | `proxy.upgradeTo(version() + 1, newImplementation)` then `mediator.setTokenFactory(newFactory)`                                       | Order matters: the old implementation calls `deploy` with 4 arguments and would fail against the new factory. `setTokenFactory` is `onlyOwner`, so it cannot go through `upgradeToAndCall`.                                                                                                                   |
 
 Step 3 and 4 is going to be in a batch Safe transaction during bridge upgrade.
 
@@ -119,6 +119,47 @@ Check after the upgrade:
 
 Messages already sent before the upgrade carry their old gas limit. A Gnosis -> Ethereum `deployAndHandleBridgedTokens`
 message sent with 600k fails on the new Ethereum code and must be refunded with `requestFailedMessageFix`. To avoid this, upgrading txs should be executed in parallel.
+
+# Gas limit update rationale
+
+Gnosis -> Ethereum messages get their gas limit from the Gnosis gas limit manager
+(`0x68A3674028a785A8BCE19bA81B9ab7c9942BA3ED`), which currently gives `deployAndHandleBridgedTokens` 600,000.
+The CREATE2 deploy path needs more than that on Ethereum, so step 3 raises it to 850,000.
+
+Measured gas for the first bridge of a new token (`test_firstBridge_deploysToken` in `test-e2e/`), on forks of
+Ethereum (block 26383762) and Gnosis Chain (block 49205495), with `forge test --isolate` so each AMB call is metered as
+its own transaction (excludes the 21k base transaction cost, which is the same before and after):
+
+| Chain (entry call)                  | Frame                          | Before (CREATE) | After (CREATE2) |     Diff |
+| ----------------------------------- | ------------------------------ | --------------: | --------------: | -------: |
+| Ethereum (`executeSignatures`)      | `executeSignatures`            |         665,350 |         881,419 | +216,069 |
+|                                     | `deployAndHandleBridgedTokens` |         534,526 |         750,595 | +216,069 |
+|                                     | `TokenFactory.deploy`          |         262,906 |         478,897 | +215,991 |
+| Gnosis Chain (`executeAffirmation`) | `executeAffirmation`           |         683,650 |         899,719 | +216,069 |
+|                                     | `deployAndHandleBridgedTokens` |         537,186 |         753,255 | +216,069 |
+|                                     | `TokenFactory.deploy`          |         262,906 |         478,897 | +215,991 |
+
+Inside the new `deploy`: CREATE2 of the proxy costs 279,149 and `initialize` 161,025, against 227,182 for the old
+`new TokenProxy(...)`. Nearly all of the +216k is code deposit (200 gas per byte): the initialization code moved
+from the constructor into the TokenProxy runtime, which grows from 328 to 1,394 bytes.
+
+Production problem: the AMB calls the mediator with the gas limit carried in the message.
+
+| Direction                                 | Message gas limit (production)            | Needed before | Needed after | Result after upgrade |
+| ----------------------------------------- | ----------------------------------------- | ------------: | -----------: | -------------------- |
+| Gnosis -> Ethereum (`executeSignatures`)  | 600,000 (Gnosis gas limit manager)        |       534,526 |      750,595 | Out of gas           |
+| Ethereum -> Gnosis (`executeAffirmation`) | 2,000,000 (`requestGasLimit` on Ethereum) |       537,186 |      753,255 | OK                   |
+
+Re-running the Gnosis -> Ethereum test with the production gas limit manager passes before the upgrade and fails
+after it with `OutOfGas` inside `TokenFactory.deploy`. The message is marked failed and the user has to get the tokens
+back with `requestFailedMessageFix`.
+
+Why 850,000:
+
+- Covers the measured 750,595 with ~100k (~13%) headroom for longer names/symbols and chain state differences.
+- Stays below the AMB `maxGasPerTx` on both sides (Gnosis 2,000,000, Ethereum 4,000,000).
+- `deployAndHandleBridgedTokensAndCall` was not measured separately. It also calls the receiver, so the headroom has
+  to cover that callback.
 
 # For bridge governors & verification purpose
 
