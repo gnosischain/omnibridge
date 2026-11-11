@@ -1,6 +1,6 @@
 const { toWei } = require('web3').utils
 const { web3Home, deploymentAddress } = require('../web3')
-const { deployContract, upgradeProxy } = require('../deploymentUtils')
+const { deployContract, upgradeProxy, transferOwnership, allowTokenFactoryDeployer } = require('../deploymentUtils')
 const {
   HOME_ERC677_TOKEN_IMAGE,
   HOME_TOKEN_FACTORY,
@@ -50,13 +50,18 @@ async function deployHome() {
       console.log('\n[Home] Using existing ERC677 token image: ', homeTokenImage)
     }
     console.log('\n[Home] Deploying new token factory')
-    const factory = await deployContract(TokenFactory, [HOME_BRIDGE_OWNER, homeTokenImage], {
+    // Owned by the deployment account first, so it can allow the mediator, then handed to the bridge owner
+    const factory = await deployContract(TokenFactory, [deploymentAddress, homeTokenImage], {
       nonce: nonce++,
     })
     tokenFactory = factory.options.address
     console.log('\n[Home] New token factory has been deployed: ', tokenFactory)
+    nonce = await allowTokenFactoryDeployer({ factory, mediator: homeBridgeStorage.options.address, nonce })
+    await transferOwnership({ contract: factory, newOwner: HOME_BRIDGE_OWNER, nonce: nonce++ })
   } else {
     console.log('\n[Home] Using existing token factory: ', tokenFactory)
+    const factory = new web3Home.eth.Contract(TokenFactory.abi, tokenFactory)
+    nonce = await allowTokenFactoryDeployer({ factory, mediator: homeBridgeStorage.options.address, nonce })
   }
 
   let feeManager = ZERO_ADDRESS

@@ -157,6 +157,26 @@ async function setBridgeContract({ contract, bridgeAddress, nonce, network }) {
   })
 }
 
+// Allows the mediator to deploy tokens through the token factory.
+// Sends the tx if the deployment account owns the factory, otherwise prints the call for the owner.
+// Returns the next nonce.
+async function allowTokenFactoryDeployer({ factory, mediator, nonce, network }) {
+  if (await factory.methods.isDeployer(mediator).call()) {
+    return nonce
+  }
+  const data = factory.methods.setDeployer(mediator, true).encodeABI()
+  const owner = await factory.methods.owner().call()
+  if (owner.toLowerCase() !== deploymentAddress.toLowerCase()) {
+    console.log(`Token factory owner (${owner}) must call setDeployer(mediator, true):
+    to: ${factory.options.address}
+    data: ${data}`)
+    return nonce
+  }
+  await sendTx(network, { data, nonce, to: factory.options.address })
+  console.log('Token factory: mediator allowed as deployer')
+  return nonce + 1
+}
+
 async function isContract(web3, address) {
   const code = await web3.eth.getCode(address)
   return code !== '0x' && code !== '0x0'
@@ -170,5 +190,6 @@ module.exports = {
   transferProxyOwnership,
   transferOwnership,
   setBridgeContract,
+  allowTokenFactoryDeployer,
   isContract,
 }

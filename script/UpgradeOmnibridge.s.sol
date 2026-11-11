@@ -15,7 +15,8 @@ import "../contracts/upgradeable_contracts/ForeignOmnibridge.sol";
  *   TOKEN_NAME_SUFFIX    suffix passed to the implementation constructor, e.g. " from Mainnet"
  *   NEW_TOKEN_FACTORY    optional, token factory to switch to (see DeployTokenFactory.s.sol)
  *
- * upgradeTo needs the proxy's upgradeability owner and setTokenFactory needs the bridge owner.
+ * upgradeTo needs the proxy's upgradeability owner, setTokenFactory needs the bridge owner and
+ * setDeployer (allowing the mediator on NEW_TOKEN_FACTORY) needs the factory owner.
  * If the broadcaster is not that account (e.g. a Safe), the script prints the calls instead.
  * Run both calls in one Safe batch (MultiSend) so the old implementation never talks to the new factory.
  */
@@ -48,6 +49,12 @@ contract UpgradeOmnibridge is OmnibridgeScript {
                 address(proxy),
                 abi.encodeWithSelector(proxy.upgradeTo.selector, newVersion, implementation)
             );
+        }
+
+        address newFactory = vm.envOr("NEW_TOKEN_FACTORY", address(0));
+        if (newFactory != address(0)) {
+            // The new factory only accepts deploy() calls from allowed deployers.
+            _setFactoryDeployer(TokenFactory(newFactory), address(proxy));
         }
 
         vm.stopBroadcast();

@@ -34,18 +34,26 @@ Scripts in `script/` (pass a signer with `--private-key`, `--account` or `--ledg
 | Script | What it does |
 | --- | --- |
 | `DeployOmnibridge.s.sol` | Deploys and initializes both sides, like `deploy/deploy.js`. Reads the same variables as `deploy/.env`. |
-| `UpgradeOmnibridge.s.sol` | Deploys a new mediator implementation and upgrades the proxy. Prints the call if the signer is not the proxy owner (e.g. a Safe). |
+| `DeployTokenFactory.s.sol` | Deploys the CREATE2 `TokenFactory` through the EIP-7997 factory (same address on every chain for the same signer and salt) and approves a mediator. |
+| `UpgradeOmnibridge.s.sol` | Deploys a new mediator implementation, upgrades the proxy, optionally switches the token factory. Prints the calls if the signer is not the owner (e.g. a Safe). |
 
 ```bash
 set -a; source deploy/.env; set +a
 forge script script/DeployOmnibridge.s.sol --broadcast --private-key $DEPLOYMENT_ACCOUNT_PRIVATE_KEY
 
-MEDIATOR=0x... MEDIATOR_SIDE=home TOKEN_NAME_SUFFIX=" from Mainnet" \
+MEDIATOR=0x... TOKEN_IMAGE=0x... FACTORY_OWNER=0x... \
+  forge script script/DeployTokenFactory.s.sol --rpc-url $HOME_RPC_URL --broadcast --account deployer
+
+MEDIATOR=0x... MEDIATOR_SIDE=home TOKEN_NAME_SUFFIX=" from Mainnet" NEW_TOKEN_FACTORY=0x... \
   forge script script/UpgradeOmnibridge.s.sol --rpc-url $HOME_RPC_URL --broadcast --account deployer
 ```
 
-`DeployOmnibridge.s.sol` broadcasts to two chains. Foundry fails to decode the transactions when the deployer has
-the same nonce on both chains, so the script stops early in that case; send any transaction on one chain first.
+Notes:
+- `DeployOmnibridge.s.sol` broadcasts to two chains. Foundry fails to decode the transactions when the deployer has
+  the same nonce on both chains, so the script stops early in that case; send any transaction on one chain first.
+- Fees (`HOME_TRANSACTIONS_FEE`, `FOREIGN_TRANSACTIONS_FEE`) are read as decimals, like `deploy.js`.
+- Use one token factory per mediator (different `TOKEN_FACTORY_SALT`): the bridged token address depends only on the
+  factory and the source token address.
 
 ### E2E tests
 
