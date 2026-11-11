@@ -17,20 +17,22 @@ Not changed:
 
 # How
 
-| Contract          | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TokenProxy`      | No constructor arguments. Constructor stores the factory as an immutable. New `initialize(...)`, callable once and only by that factory, sets the image, name, symbol, decimals, owner, bridge and `DOMAIN_SEPARATOR`.                                                                                                                                                                                                                                                                                        |
-| `TokenFactory`    | `deploy(name, symbol, decimals, chainId, token)` calls `_deployTokenProxy(token)`, which runs the `create2` opcode in inline assembly on `type(TokenProxy).creationCode` with the token as salt, and reverts (bubbling up the reason) if `create2` returns 0, e.g. the address is already taken. Then it calls `initialize`. Only addresses with `isDeployer[addr] == true` can deploy (set by owner with `setDeployer`), so nobody else can take a predicted address. New `predictTokenProxyAddress(token)`. |
-| `BasicOmnibridge` | Passes the source token to `deploy`. New view `bridgedTokenAddressOrPredicted(nativeToken)`. Inherited by `HomeOmnibridge` and `ForeignOmnibridge`.                                                                                                                                                                                                                                                                                                                                                           |
+| Contract          | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `TokenProxy`      | No constructor arguments. Constructor stores the factory as an immutable. New `initialize(...)`, callable once and only by that factory, sets the image, name, symbol, decimals, owner, bridge and `DOMAIN_SEPARATOR`.                                                                                                                                                                                                                                                                                                                                       |
+| `TokenFactory`    | `deploy(name, symbol, decimals, chainId, token)` calls `_deployTokenProxy(token)`, which runs the `create2` opcode in inline assembly on `type(TokenProxy).creationCode` with the token as salt, and reverts (bubbling up the reason) if `create2` returns 0, e.g. the address is already taken. Then it calls `initialize`. Only addresses with `isDeployer[addr] == true` can deploy (set by owner with `setDeployer`), so only permitted deployer(Omnibridge contract in production) can take a predicted address. New `predictTokenProxyAddress(token)`. |
+| `BasicOmnibridge` | Passes the source token to `deploy`. New view `bridgedTokenAddressOrPredicted(nativeToken)`. Inherited by `HomeOmnibridge` and `ForeignOmnibridge`.                                                                                                                                                                                                                                                                                                                                                                                                          |
+
+Access control:
+
+1. `TokenFactory`: Only permissioned deployer can deploy new token proxy contract. This rational is that only Omnibridge contract can deploy the bridged token proxy and be the owner of the token contract, instead of arbitrary address pre-deploy a bridged token proxy and become the owner.
 
 Rollout per chain:
 
 1. Deploy the new `TokenFactory` through EIP-7997, configure it (token image, `setDeployer(mediator, true)`), and hand
    ownership to the bridge owner.
-2. Upgrade the mediator to the new implementation and point it to the new factory (see
+1. Upgrade the mediator to the new implementation and point it to the new factory (see
    [Bridge upgrade procedure](#bridge-upgrade-procedure)).
-
-`TokenProxy` is not deployed separately: the factory deploys one per new token.
 
 # For Developer
 
@@ -161,6 +163,11 @@ Why 850,000:
 - `deployAndHandleBridgedTokensAndCall` was not measured separately. It also calls the receiver, so the headroom has
   to cover that callback.
 
+# Glossary
+
+1. Mediator: used interchangeably with the Omnibridge contract, either Foreign or Home.
+2. Permittable token: Token implementation contract.
+
 # For bridge governors & verification purpose
 
 # Audit
@@ -168,6 +175,5 @@ Why 850,000:
 # Dev
 
 1. Testing
-1.
 1. Virtual Testnet
 1. UI
