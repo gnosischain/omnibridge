@@ -19,11 +19,7 @@ interface IBridgeValidators {
 interface IForeignAMB {
     function safeExecuteSignatures(bytes calldata _data, bytes calldata _signatures) external;
 
-    function safeExecuteSignaturesWithGasLimit(
-        bytes calldata _data,
-        bytes calldata _signatures,
-        uint32 _gas
-    ) external;
+    function safeExecuteSignaturesWithGasLimit(bytes calldata _data, bytes calldata _signatures, uint32 _gas) external;
 
     function safeExecuteSignaturesWithAutoGasLimit(bytes calldata _data, bytes calldata _signatures) external;
 
@@ -42,14 +38,59 @@ interface IFailedMessagesProcessor {
     function requestFailedMessageFix(bytes32 _messageId) external;
 }
 
-
 interface IERC20Balance {
     function balanceOf(address _account) external view returns (uint256);
 }
 
+// Recipients used to exercise BasicOmnibridge._receiverCallback: a failed callback is tolerated
+// (ReceiverCallbackFailed is emitted) except for the WETH router, where ForeignOmnibridge requires it.
+
+/// @dev Implements onTokenBridged and records the call.
+contract CallbackReceiver {
+    address public token;
+    uint256 public value;
+    bytes public data;
+    uint256 public calls;
+
+    function onTokenBridged(address _token, uint256 _value, bytes calldata _data) external {
+        token = _token;
+        value = _value;
+        data = _data;
+        calls++;
+    }
+}
+
+/// @dev Implements onTokenBridged but always rejects it.
+contract RevertingCallbackReceiver {
+    function onTokenBridged(address, uint256, bytes calldata) external pure {
+        revert("rejected");
+    }
+}
+
+/// @dev No onTokenBridged, no fallback, no receive: any call with calldata reverts.
+contract NoCallbackReceiver {}
+
+/// @dev No onTokenBridged, only receive(). receive() never handles calls with calldata, so
+///      onTokenBridged still reverts (same shape as GnosisBridgeAdapter on Gnosis).
+contract ReceiveOnlyReceiver {
+    receive() external payable {}
+}
+
+/// @dev No onTokenBridged, but a fallback that accepts any call.
+contract FallbackReceiver {
+    uint256 public calls;
+
+    fallback() external {
+        calls++;
+    }
+}
 
 // Environment: run in a fork environemnt in Ethereum
-contract BasicOmnibridgeFixTest is Test {
+contract BasicOmnibridgeReceiverCallbackTest is Test {
+    event ReceiverCallbackFailed(
+        address indexed recipient, address indexed token, uint256 value, bytes32 indexed messageId
+    );
+
     address constant OMNIBRIDGE = 0x88ad09518695c6c3712AC10a214bE5109a655671;
     address constant AMB = 0x4C36d2919e407f0Cc2Ee3c993ccF8ac26d9CE64e;
     address constant WETH_ROUTER = 0xa6439Ca0FCbA1d0F80df0bE6A17220feD9c9038a;
@@ -80,7 +121,6 @@ contract BasicOmnibridgeFixTest is Test {
     ForeignOmnibridge newForeignOmnibridgeImpl;
 
     function setUp() public {
-     
         newForeignOmnibridgeImpl = new ForeignOmnibridge("on_ETH");
 
         // create mock bridge validator + add into validator list + set threshold to 1
@@ -158,11 +198,7 @@ contract BasicOmnibridgeFixTest is Test {
         IForeignAMB(AMB).executeSignatures(message, signatures);
 
         // WETH left the bridge but never reached the recipient.
-        assertEq(
-            IERC20Balance(WETH).balanceOf(OMNIBRIDGE),
-            bridgeWethBefore - WETH_AMOUNT,
-            "bridge released the WETH"
-        );
+        assertEq(IERC20Balance(WETH).balanceOf(OMNIBRIDGE), bridgeWethBefore - WETH_AMOUNT, "bridge released the WETH");
         assertEq(IERC20Balance(WETH).balanceOf(WETH_ROUTER), WETH_AMOUNT, "WETH stranded in the router");
         assertEq(recipient.balance, 0, "recipient must not get unwrapped ETH");
 
@@ -291,20 +327,169 @@ contract BasicOmnibridgeFixTest is Test {
         _assertAutoGasLimitRevertsOrDelivers();
     }
 
+    // Callback outcomes
+    //
+    // For ordinary recipients a failed onTokenBridged call is tolerated as before: the tokens are
+    // delivered and ReceiverCallbackFailed is emitted. Only the WETH router must succeed; if it
+    // does not, the whole message fails and the sender is refunded through requestFailedMessageFix.
+    // These tests relay with plain executeSignatures and a generous header gas limit, so any
+    // failure comes from the recipient, not from gas.
+
+    /// @dev Behaviour change, pre-fix: a contract without onTokenBridged or fallback still got the
+    ///      tokens, because the failed callback was ignored.
+    function test_preFix_callback_contractWithoutHandler_stillReceivesTokens() public {
+        address receiver = address(new NoCallbackReceiver());
+        uint256 bridgeWethBefore = IERC20Balance(WETH).balanceOf(OMNIBRIDGE);
+
+        _relayClaim(receiver, hex"1234");
+
+        assertEq(IERC20Balance(WETH).balanceOf(receiver), WETH_AMOUNT, "tokens delivered despite failed callback");
+        assertEq(IERC20Balance(WETH).balanceOf(OMNIBRIDGE), bridgeWethBefore - WETH_AMOUNT, "bridge released WETH");
+        assertTrue(IForeignAMB(AMB).messageCallStatus(MOCK_MESSAGE_ID), "recorded as success pre-fix");
+    }
+
+    /// @dev Handler succeeds: tokens are delivered and the callback sees the bridged arguments.
+    function test_postFix_callback_contractWithHandler_delivers() public {
+        _upgradeToFixedImplementation();
+        CallbackReceiver receiver = new CallbackReceiver();
+
+        _relayClaim(address(receiver), hex"1234");
+
+        _assertDelivered(address(receiver));
+        assertEq(receiver.calls(), 1, "callback should run once");
+        assertEq(receiver.token(), WETH, "callback token");
+        assertEq(receiver.value(), WETH_AMOUNT, "callback value");
+        assertEq(receiver.data(), hex"1234", "callback data");
+    }
+
+    /// @dev No handler, but a fallback that accepts the call: still delivers.
+    function test_postFix_callback_contractWithAcceptingFallback_delivers() public {
+        _upgradeToFixedImplementation();
+        FallbackReceiver receiver = new FallbackReceiver();
+
+        _relayClaim(address(receiver), hex"1234");
+
+        _assertDelivered(address(receiver));
+        assertEq(receiver.calls(), 1, "fallback should run once");
+    }
+
+    /// @dev EOA recipient: no callback is made, tokens are delivered.
+    function test_postFix_callback_eoaRecipient_deliversWithoutCallback() public {
+        _upgradeToFixedImplementation();
+        address eoa = makeAddr("eoaRecipient");
+
+        _relayClaim(eoa, hex"1234");
+
+        _assertDelivered(eoa);
+    }
+
+    /// @dev No handler and no fallback: the callback reverts, but the tokens are still delivered
+    ///      and the failure is reported through ReceiverCallbackFailed.
+    function test_postFix_callback_contractWithoutHandlerOrFallback_deliversAndEmitsFailure() public {
+        _upgradeToFixedImplementation();
+        _assertDeliveredWithFailedCallback(address(new NoCallbackReceiver()), hex"1234");
+    }
+
+    /// @dev receive() alone does not handle onTokenBridged (it carries calldata), so the callback
+    ///      reverts; the tokens are still delivered and the failure is reported.
+    function test_postFix_callback_receiveOnlyContract_deliversAndEmitsFailure() public {
+        _upgradeToFixedImplementation();
+        _assertDeliveredWithFailedCallback(address(new ReceiveOnlyReceiver()), hex"1234");
+    }
+
+    /// @dev Handler exists but reverts: the tokens are still delivered and the failure is reported.
+    function test_postFix_callback_revertingHandler_deliversAndEmitsFailure() public {
+        _upgradeToFixedImplementation();
+        _assertDeliveredWithFailedCallback(address(new RevertingCallbackReceiver()), hex"1234");
+    }
+
+    /// @dev The WETH router rejects a payload that is not a 20-byte address. Pre-fix this stranded
+    ///      the WETH in the router; now the message fails and nothing is left there.
+    function test_postFix_callback_routerRejectsBadPayload_failsAndIsRefundable() public {
+        _upgradeToFixedImplementation();
+        _assertFailsAndIsRefundable(WETH_ROUTER, "");
+    }
+
+    /// @dev Through safeExecuteSignaturesWithGasLimit a failed callback on an ordinary recipient no
+    ///      longer reverts the relay: the claim settles, the tokens are delivered and the failure is reported.
+    function test_postFix_callback_contractWithoutHandler_safeExecuteDelivers() public {
+        _upgradeToFixedImplementation();
+        address receiver = address(new NoCallbackReceiver());
+        bytes memory message = _createClaimMessage(MOCK_MESSAGE_ID, receiver, hex"1234", 1000000);
+        bytes memory signatures = _signMessage(message);
+        uint256 bridgeWethBefore = IERC20Balance(WETH).balanceOf(OMNIBRIDGE);
+
+        vm.expectEmit(true, true, true, true, OMNIBRIDGE);
+        emit ReceiverCallbackFailed(receiver, WETH, WETH_AMOUNT, MOCK_MESSAGE_ID);
+        vm.prank(ATTACKER);
+        IForeignAMB(AMB).safeExecuteSignaturesWithGasLimit(message, signatures, HONEST_GAS);
+
+        assertEq(IERC20Balance(WETH).balanceOf(OMNIBRIDGE), bridgeWethBefore - WETH_AMOUNT, "bridge released WETH");
+        _assertDelivered(receiver);
+    }
+
+    /// @dev Relays a WETH claim to `_to` with plain executeSignatures and a 1,000,000 header gas limit.
+    function _relayClaim(address _to, bytes memory _payload) internal {
+        bytes memory message = _createClaimMessage(MOCK_MESSAGE_ID, _to, _payload, 1000000);
+        bytes memory signatures = _signMessage(message);
+        vm.prank(ATTACKER);
+        IForeignAMB(AMB).executeSignatures(message, signatures);
+    }
+
+    function _assertDelivered(address _to) internal {
+        assertEq(IERC20Balance(WETH).balanceOf(_to), WETH_AMOUNT, "recipient should receive WETH");
+        assertTrue(IForeignAMB(AMB).relayedMessages(MOCK_MESSAGE_ID), "message should be relayed");
+        assertTrue(IForeignAMB(AMB).messageCallStatus(MOCK_MESSAGE_ID), "message should succeed");
+    }
+
+    /// @dev Relays a claim to an ordinary recipient whose callback fails, and checks that the tokens
+    ///      are delivered, the message succeeds, and ReceiverCallbackFailed is emitted by the mediator.
+    function _assertDeliveredWithFailedCallback(address _to, bytes memory _payload) internal {
+        bytes memory message = _createClaimMessage(MOCK_MESSAGE_ID, _to, _payload, 1000000);
+        bytes memory signatures = _signMessage(message);
+        uint256 bridgeWethBefore = IERC20Balance(WETH).balanceOf(OMNIBRIDGE);
+
+        vm.expectEmit(true, true, true, true, OMNIBRIDGE);
+        emit ReceiverCallbackFailed(_to, WETH, WETH_AMOUNT, MOCK_MESSAGE_ID);
+        vm.prank(ATTACKER);
+        IForeignAMB(AMB).executeSignatures(message, signatures);
+
+        assertEq(IERC20Balance(WETH).balanceOf(OMNIBRIDGE), bridgeWethBefore - WETH_AMOUNT, "bridge released WETH");
+        _assertDelivered(_to);
+    }
+
+    /// @dev Relays a claim whose callback fails and checks that nothing moved, the message is
+    ///      recorded as failed, and the refund can be requested.
+    function _assertFailsAndIsRefundable(address _to, bytes memory _payload) internal {
+        uint256 bridgeWethBefore = IERC20Balance(WETH).balanceOf(OMNIBRIDGE);
+        uint256 recipientWethBefore = IERC20Balance(WETH).balanceOf(_to);
+
+        _relayClaim(_to, _payload);
+
+        assertEq(IERC20Balance(WETH).balanceOf(OMNIBRIDGE), bridgeWethBefore, "no WETH should be released");
+        assertEq(IERC20Balance(WETH).balanceOf(_to), recipientWethBefore, "recipient must not get WETH");
+        assertTrue(IForeignAMB(AMB).relayedMessages(MOCK_MESSAGE_ID), "message should be marked relayed");
+        assertFalse(IForeignAMB(AMB).messageCallStatus(MOCK_MESSAGE_ID), "call status should be failure");
+        assertEq(IForeignAMB(AMB).failedMessageReceiver(MOCK_MESSAGE_ID), OMNIBRIDGE, "failed receiver");
+        assertEq(IForeignAMB(AMB).failedMessageSender(MOCK_MESSAGE_ID), HOME_OMNIBRIDGE, "failed sender");
+
+        // Anyone can request the refund; it sends fixFailedMessage back to the Home mediator.
+        IFailedMessagesProcessor(OMNIBRIDGE).requestFailedMessageFix(MOCK_MESSAGE_ID);
+    }
+
     /**
      * @dev Asserts the two halves of the AutoGasLimit outcome: a constrained transaction budget
      *      fails cleanly with nothing stranded, and an unconstrained one delivers in full.
      */
     function _assertAutoGasLimitRevertsOrDelivers() internal {
-        bytes memory callData =
-            abi.encodeWithSignature(
-                "safeExecuteSignaturesWithAutoGasLimit(bytes,bytes)", messageData, messageSignatures
-            );
+        bytes memory callData = abi.encodeWithSignature(
+            "safeExecuteSignaturesWithAutoGasLimit(bytes,bytes)", messageData, messageSignatures
+        );
 
         // Below the threshold: the whole transaction fails, nothing settles anywhere.
         uint256 snapshotId = vm.snapshot();
         uint256 bridgeWethBefore = IERC20Balance(WETH).balanceOf(OMNIBRIDGE);
-        (bool success, ) = AMB.call{ gas: AUTO_STARVED_TX_GAS }(callData);
+        (bool success,) = AMB.call{gas: AUTO_STARVED_TX_GAS}(callData);
         assertFalse(success, "starved auto-gas relay should fail outright");
         assertEq(IERC20Balance(WETH).balanceOf(OMNIBRIDGE), bridgeWethBefore, "no WETH should leave the bridge");
         assertEq(IERC20Balance(WETH).balanceOf(WETH_ROUTER), 0, "nothing stranded in the router");
@@ -325,7 +510,6 @@ contract BasicOmnibridgeFixTest is Test {
         assertEq(recipient.balance, WETH_AMOUNT, "recipient should receive the unwrapped ETH");
     }
 
-    
     /// @dev Upgrades the ForeignOmnibridge proxy to the locally built implementation.
     function _upgradeToFixedImplementation() internal {
         EternalStorageProxy proxy = EternalStorageProxy(payable(OMNIBRIDGE));
@@ -333,7 +517,6 @@ contract BasicOmnibridgeFixTest is Test {
         vm.prank(BRIDGE_OWNER);
         proxy.upgradeTo(nextVersion, address(newForeignOmnibridgeImpl));
     }
-
 
     /**
      * @dev Builds the AMB message for a WETH claim routed through WETHOmnibridgeRouter, which is
@@ -347,37 +530,36 @@ contract BasicOmnibridgeFixTest is Test {
     }
 
     /// @dev Same, with an explicit header gasLimit — the value plain executeSignatures honours.
-    function _createMockWETHClaimMessage(bytes32 mesgId, uint32 headerGasLimit)
+    function _createMockWETHClaimMessage(bytes32 mesgId, uint32 headerGasLimit) public view returns (bytes memory) {
+        return _createClaimMessage(mesgId, WETH_ROUTER, abi.encodePacked(recipient), headerGasLimit);
+    }
+
+    /// @dev WETH claim to any recipient `_to`, with `_payload` passed to its onTokenBridged callback.
+    function _createClaimMessage(bytes32 mesgId, address _to, bytes memory _payload, uint32 headerGasLimit)
         public
-        view
+        pure
         returns (bytes memory)
     {
-        bytes memory data =
-            abi.encodeWithSignature(
-                "handleNativeTokensAndCall(address,address,uint256,bytes)",
-                WETH,
-                WETH_ROUTER,
-                WETH_AMOUNT,
-                abi.encodePacked(recipient)
-            );
+        bytes memory data = abi.encodeWithSignature(
+            "handleNativeTokensAndCall(address,address,uint256,bytes)", WETH, _to, WETH_AMOUNT, _payload
+        );
 
         // AMB ArbitraryMessage envelope: 32 messageId | 20 sender | 20 executor | 4 gasLimit
         // | 1 srcChainIdLen | 1 dstChainIdLen | 1 dataType | srcChainId | dstChainId | data.
         // The header gasLimit is ignored by safeExecuteSignaturesWithGasLimit (it passes _gas
         // instead) but is used by plain executeSignatures.
-        return
-            abi.encodePacked(
-                mesgId,
-                HOME_OMNIBRIDGE,
-                OMNIBRIDGE,
-                headerGasLimit,
-                uint8(1),
-                uint8(1),
-                uint8(0),
-                uint8(100), // source chain id: Gnosis Chain
-                uint8(1), // destination chain id: Ethereum
-                data
-            );
+        return abi.encodePacked(
+            mesgId,
+            HOME_OMNIBRIDGE,
+            OMNIBRIDGE,
+            headerGasLimit,
+            uint8(1),
+            uint8(1),
+            uint8(0),
+            uint8(100), // source chain id: Gnosis Chain
+            uint8(1), // destination chain id: Ethereum
+            data
+        );
     }
 
     function _createMockBridgeValidator() public returns (address) {
@@ -399,9 +581,7 @@ contract BasicOmnibridgeFixTest is Test {
      */
     function _signMessage(bytes memory _message) internal returns (bytes memory) {
         bytes32 digest =
-            keccak256(
-                abi.encodePacked("\x19Ethereum Signed Message:\n", vm.toString(_message.length), _message)
-            );
+            keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n", vm.toString(_message.length), _message));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(bridgeValidatorPrivateKey, digest);
         return abi.encodePacked(uint8(1), v, r, s);
     }

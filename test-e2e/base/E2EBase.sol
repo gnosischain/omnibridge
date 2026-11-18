@@ -127,7 +127,8 @@ abstract contract E2EBase is TestHelpers {
 
     /**
      * @dev Deploys a new Omnibridge pair on top of the production AMBs, the same way script/DeployOmnibridge.s.sol
-     * does: EternalStorageProxy + implementation, a TokenFactory, then initialize.
+     * does: EternalStorageProxy + implementation, a TokenFactory, then initialize, then allow the mediator to deploy
+     * tokens through the factory (setDeployer).
      * No fee, gas limit or forwarding rules managers on the home side.
      */
     function _deployMediators() internal {
@@ -149,6 +150,8 @@ abstract contract E2EBase is TestHelpers {
             bridgeOwner,
             address(foreignFactory)
         );
+        vm.prank(bridgeOwner); // factory owner
+        foreignFactory.setDeployer(address(foreignMediator), true);
 
         vm.selectFork(homeFork);
         homeProxy.upgradeTo(1, address(new HomeOmnibridge(HOME_SUFFIX)));
@@ -165,6 +168,8 @@ abstract contract E2EBase is TestHelpers {
             address(0), // fee manager
             address(0) // forwarding rules manager
         );
+        vm.prank(bridgeOwner); // factory owner
+        homeFactory.setDeployer(address(homeMediator), true);
     }
 
     // TokenFactory on the selected fork.

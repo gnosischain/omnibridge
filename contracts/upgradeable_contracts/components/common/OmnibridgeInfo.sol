@@ -8,12 +8,12 @@ import "../../VersionableBridge.sol";
  */
 contract OmnibridgeInfo is VersionableBridge {
     event TokensBridgingInitiated(
-        address indexed token,
-        address indexed sender,
-        uint256 value,
-        bytes32 indexed messageId
+        address indexed token, address indexed sender, uint256 value, bytes32 indexed messageId
     );
     event TokensBridged(address indexed token, address indexed recipient, uint256 value, bytes32 indexed messageId);
+    event ReceiverCallbackFailed(
+        address indexed recipient, address indexed token, uint256 value, bytes32 indexed messageId
+    );
 
     /**
      * @dev Tells the bridge interface version that this contract supports.

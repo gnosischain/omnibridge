@@ -16,6 +16,10 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
     using SafeMint for IBurnableMintableERC677Token;
     using SafeMath for uint256;
 
+    // WETHOmnibridgeRouter on Ethereum mainnet. It unwraps bridged WETH and forwards ETH in its
+    // onTokenBridged callback, so that callback must not be allowed to fail silently.
+    address internal constant WETH_OMNIBRIDGE_ROUTER = 0xa6439Ca0FCbA1d0F80df0bE6A17220feD9c9038a;
+
     constructor(string memory _suffix) BasicOmnibridge(_suffix) {}
 
     /**
@@ -55,58 +59,19 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
     }
 
     /**
-     * One-time function to be used together with upgradeToAndCall method.
-     * Sets the token factory contract and enables interest earning for USDC and USDT
-     * Selector: d814b1d7
-     * @param _tokenFactory address of the deployed TokenFactory contract.
-     */
-    function migrateTo_3_3_0(address _tokenFactory, address _interestImplementation) external {
-        bytes32 upgradeStorage = 0xd814b1d787b8a2d93a1c320d66800a58a03ed3bf12b285ec5ec1e0e26d6550cc; // keccak256(abi.encodePacked('migrateTo_3_3_0(address,address)'))
-        require(!boolStorage[upgradeStorage]);
-
-        _setTokenFactory(_tokenFactory);
-
-        // required for Tornado Cash operations
-        _setRequestGasLimit(2000000);
-
-        // USDC
-        address token = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
-        uint256 minCash = 2500000 * 1000000; // 2'500'000 USDC
-        _setInterestImplementation(token, _interestImplementation);
-        _setMinCashThreshold(token, minCash);
-
-        uint256 balance = mediatorBalance(token);
-        require(balance > minCash);
-        uint256 amount = balance - minCash;
-
-        IERC20(token).safeTransfer(_interestImplementation, amount);
-        IInterestImplementation(_interestImplementation).invest(token, amount);
-
-        // USDT
-        token = address(0xdAC17F958D2ee523a2206206994597C13D831ec7);
-        minCash = 750000 * 1000000; // 750'000 USDT
-        _setInterestImplementation(token, _interestImplementation);
-        _setMinCashThreshold(token, minCash);
-
-        balance = mediatorBalance(token);
-        require(balance > minCash);
-        amount = balance - minCash;
-
-        IERC20(token).safeTransfer(_interestImplementation, amount);
-        IInterestImplementation(_interestImplementation).invest(token, amount);
-
-        boolStorage[upgradeStorage] = true;
-    }
-
-    /**
      * @dev Handles the bridged tokens.
      * Checks that the value is inside the execution limits and invokes the Mint or Unlock accordingly.
      * @param _token token contract address on this side of the bridge.
      * @param _isNative true, if given token is native to this chain and Unlock should be used.
      * @param _recipient address that will receive the tokens.
      * @param _value amount of tokens to be received.
+     * @return amount of tokens delivered to the recipient.
      */
-    function _handleTokens(address _token, bool _isNative, address _recipient, uint256 _value) internal override {
+    function _handleTokens(address _token, bool _isNative, address _recipient, uint256 _value)
+        internal
+        override
+        returns (uint256)
+    {
         // prohibit withdrawal of tokens during other bridge operations (e.g. relayTokens)
         // such reentrant withdrawal can lead to an incorrect balanceDiff calculation
         require(!lock());
@@ -117,6 +82,8 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
         _releaseTokens(_isNative, _token, _recipient, _value, _value);
 
         emit TokensBridged(_token, _recipient, _value, messageId());
+
+        return _value;
     }
 
     /**
@@ -158,13 +125,10 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
      * @param _value amount of tokens to unlock.
      * @param _balanceChange amount of balance to subtract from the mediator balance.
      */
-    function _releaseTokens(
-        bool _isNative,
-        address _token,
-        address _recipient,
-        uint256 _value,
-        uint256 _balanceChange
-    ) internal override {
+    function _releaseTokens(bool _isNative, address _token, address _recipient, uint256 _value, uint256 _balanceChange)
+        internal
+        override
+    {
         if (_isNative) {
             // There are two edge cases related to withdrawals on the foreign side of the bridge.
             // 1) Minting of extra STAKE tokens, if supply on the Home side exceeds total bridge amount on the Foreign side.
@@ -200,6 +164,25 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
             IERC677(_token).safeTransfer(_recipient, _value);
         } else {
             _getMinterFor(_token).safeMint(_recipient, _value);
+        }
+    }
+
+    /**
+     * @dev Same as BasicOmnibridge, except that a failed callback on the WETH router reverts the whole
+     * message. Otherwise a relayer could starve the callback of gas and leave the WETH stuck in the router.
+     * A reverted message stays recoverable through requestFailedMessageFix.
+     */
+    function _receiverCallback(address _recipient, address _token, uint256 _value, bytes memory _data)
+        internal
+        override
+    {
+        if (_recipient == WETH_OMNIBRIDGE_ROUTER) {
+            (bool success, ) = _recipient.call(
+                abi.encodeWithSelector(IERC20Receiver.onTokenBridged.selector, _token, _value, _data)
+            );
+            require(success, "WETH router callback failed");
+        } else {
+            super._receiverCallback(_recipient, _token, _value, _data);
         }
     }
 

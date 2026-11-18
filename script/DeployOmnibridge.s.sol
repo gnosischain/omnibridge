@@ -77,7 +77,7 @@ contract DeployOmnibridge is OmnibridgeScript {
         home.proxy = new EternalStorageProxy();
         console2.log("[Home] Bridge Mediator storage:", address(home.proxy));
 
-        home.tokenFactory = _tokenFactory("HOME", owner);
+        home.tokenFactory = _tokenFactory("HOME", owner, address(home.proxy));
         home.feeManager = _homeFeeManager(address(home.proxy), owner);
         home.forwardingRulesManager = _homeForwardingRulesManager(owner);
 
@@ -104,7 +104,7 @@ contract DeployOmnibridge is OmnibridgeScript {
         foreign.proxy = new EternalStorageProxy();
         console2.log("[Foreign] Bridge Mediator storage:", address(foreign.proxy));
 
-        foreign.tokenFactory = _tokenFactory("FOREIGN", vm.envAddress("FOREIGN_BRIDGE_OWNER"));
+        foreign.tokenFactory = _tokenFactory("FOREIGN", vm.envAddress("FOREIGN_BRIDGE_OWNER"), address(foreign.proxy));
 
         address implementation = address(new ForeignOmnibridge(vm.envString("FOREIGN_TOKEN_NAME_SUFFIX")));
         console2.log("[Foreign] Bridge Mediator implementation:", implementation);
@@ -157,11 +157,17 @@ contract DeployOmnibridge is OmnibridgeScript {
     /**
      * @dev Uses <SIDE>_TOKEN_FACTORY if set, otherwise deploys a new factory owned by the bridge owner
      * (and a token image unless <SIDE>_ERC677_TOKEN_IMAGE is set), like deploy.js.
+     * Either way, the mediator is allowed to deploy tokens through the factory.
      */
-    function _tokenFactory(string memory _side, address _owner) internal returns (address) {
+    function _tokenFactory(
+        string memory _side,
+        address _owner,
+        address _mediator
+    ) internal returns (address) {
         address existing = vm.envOr(string(abi.encodePacked(_side, "_TOKEN_FACTORY")), address(0));
         if (existing != address(0)) {
             console2.log("Using existing token factory:", existing);
+            _setFactoryDeployer(TokenFactory(existing), _mediator);
             return existing;
         }
 
@@ -169,9 +175,12 @@ contract DeployOmnibridge is OmnibridgeScript {
         if (image == address(0)) {
             image = _deployTokenImage();
         }
-        address factory = address(new TokenFactory(_owner, image));
-        console2.log("Token factory deployed:", factory);
-        return factory;
+        // Owned by the broadcaster first, so it can allow the mediator, then handed to the bridge owner.
+        TokenFactory factory = new TokenFactory(_broadcaster(), image);
+        factory.setDeployer(_mediator, true);
+        factory.transferOwnership(_owner);
+        console2.log("Token factory deployed:", address(factory));
+        return address(factory);
     }
 
     function _homeFeeManager(address _mediator, address _owner) internal returns (address) {

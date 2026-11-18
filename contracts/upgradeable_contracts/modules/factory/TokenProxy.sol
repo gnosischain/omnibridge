@@ -27,8 +27,20 @@ contract TokenProxy is Proxy {
     mapping(address => uint256) internal nonces;
     mapping(address => mapping(address => uint256)) internal expirations;
 
+    // Factory that deployed this proxy. Stored in code (immutable), so it does not affect the storage layout.
+    address private immutable factory;
+
     /**
-     * @dev Creates a non-upgradeable token proxy for PermitableToken.sol, initializes its eternalStorage.
+     * @dev Creates a non-upgradeable token proxy for PermitableToken.sol.
+     * Has no constructor arguments, so the init code is the same for every token and
+     * the CREATE2 address depends only on the factory address and the salt.
+     */
+    constructor() {
+        factory = msg.sender;
+    }
+
+    /**
+     * @dev Initializes the token proxy. Can be called only once, and only by the factory that deployed it.
      * @param _tokenImage address of the token image used for mirroring all functions.
      * @param _name token name.
      * @param _symbol token symbol.
@@ -36,14 +48,15 @@ contract TokenProxy is Proxy {
      * @param _chainId chain id for current network.
      * @param _owner address of the owner for this contract.
      */
-    constructor(
+    function initialize(
         address _tokenImage,
-        string memory _name,
-        string memory _symbol,
+        string calldata _name,
+        string calldata _symbol,
         uint8 _decimals,
         uint256 _chainId,
         address _owner
-    ) {
+    ) external {
+        require(msg.sender == factory && implementation() == address(0));
         string memory version = IPermittableTokenVersion(_tokenImage).version();
 
         assembly {

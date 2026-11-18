@@ -16,6 +16,25 @@ abstract contract OmnibridgeScript is Script {
         (, sender, ) = vm.readCallers();
     }
 
+    /**
+     * @dev Allows the mediator to deploy tokens through the factory. Sends the call if the broadcaster owns the
+     * factory, otherwise prints it for the factory owner (e.g. a Safe). Must be called after vm.startBroadcast().
+     */
+    function _setFactoryDeployer(TokenFactory _factory, address _mediator) internal {
+        if (_factory.isDeployer(_mediator)) {
+            return;
+        }
+        if (_factory.owner() == _broadcaster()) {
+            _factory.setDeployer(_mediator, true);
+            console2.log("Token factory: mediator allowed as deployer");
+        } else {
+            console2.log("Token factory owner must call setDeployer(mediator, true):");
+            console2.log("  to:", address(_factory));
+            console2.log("  data:");
+            console2.logBytes(abi.encodeWithSelector(_factory.setDeployer.selector, _mediator, true));
+        }
+    }
+
     function _isContract(address _addr) internal view returns (bool) {
         uint256 size;
         assembly {

@@ -100,9 +100,9 @@ abstract contract BasicOmnibridge is
     ) external onlyMediator {
         address bridgedToken = _getBridgedTokenOrDeploy(_token, _name, _symbol, _decimals);
 
-        _handleTokens(bridgedToken, false, _recipient, _value);
+        uint256 delivered = _handleTokens(bridgedToken, false, _recipient, _value);
 
-        _receiverCallback(_recipient, bridgedToken, _value, _data);
+        _receiverCallback(_recipient, bridgedToken, delivered, _data);
     }
 
     /**
@@ -137,9 +137,9 @@ abstract contract BasicOmnibridge is
 
         require(isTokenRegistered(token));
 
-        _handleTokens(token, false, _recipient, _value);
+        uint256 delivered = _handleTokens(token, false, _recipient, _value);
 
-        _receiverCallback(_recipient, token, _value, _data);
+        _receiverCallback(_recipient, token, delivered, _data);
     }
 
     /**
@@ -170,9 +170,9 @@ abstract contract BasicOmnibridge is
     {
         _ackBridgedTokenDeploy(_token);
 
-        _handleTokens(_token, true, _recipient, _value);
+        uint256 delivered = _handleTokens(_token, true, _recipient, _value);
 
-        _receiverCallback(_recipient, _token, _value, _data);
+        _receiverCallback(_recipient, _token, delivered, _data);
     }
 
     /**
@@ -182,6 +182,21 @@ abstract contract BasicOmnibridge is
      */
     function isRegisteredAsNativeToken(address _token) public view returns (bool) {
         return isTokenRegistered(_token) && nativeTokenAddress(_token) == address(0);
+    }
+
+    /**
+     * @dev Tells the bridged token address for a native token from the other side of the bridge.
+     * Returns the registered address if the token was already bridged,
+     * otherwise the address at which the current token factory will deploy it.
+     * @param _nativeToken address of the native token contract on the other side.
+     * @return address of the bridged token contract on this side.
+     */
+    function bridgedTokenAddressOrPredicted(address _nativeToken) external view returns (address) {
+        address bridgedToken = bridgedTokenAddress(_nativeToken);
+        if (bridgedToken != address(0)) {
+            return bridgedToken;
+        }
+        return tokenFactory().predictTokenProxyAddress(_nativeToken);
     }
 
     /**
@@ -396,7 +411,7 @@ abstract contract BasicOmnibridge is
                 symbol = name;
             }
             name = _transformName(name);
-            bridgedToken = tokenFactory().deploy(name, symbol, _decimals, bridgeContract().sourceChainId());
+            bridgedToken = tokenFactory().deploy(name, symbol, _decimals, bridgeContract().sourceChainId(), _token);
             _setTokenAddressPair(_token, bridgedToken);
             _initializeTokenBridgeLimits(bridgedToken, _decimals);
         } else if (!isTokenRegistered(bridgedToken)) {
@@ -408,29 +423,27 @@ abstract contract BasicOmnibridge is
 
     /**
      * Notifies receiving contract about the completed bridging operation.
+     * A failed callback does not revert the transfer: the tokens stay with the recipient and
+     * ReceiverCallbackFailed is emitted.
      * @param _recipient address of the tokens receiver.
      * @param _token address of the bridged token.
      * @param _value amount of tokens transferred.
      * @param _data additional data passed to the callback.
      */
-    function _receiverCallback(address _recipient, address _token, uint256 _value, bytes memory _data) internal {
+    function _receiverCallback(address _recipient, address _token, uint256 _value, bytes memory _data)
+        internal
+        virtual
+    {
         if (Address.isContract(_recipient)) {
-            uint256 gasBefore = gasleft();
-            (bool success,) =
-                _recipient.call(abi.encodeWithSelector(IERC20Receiver.onTokenBridged.selector, _token, _value, _data));
-            // EIP-150 caps the callee at 63/64 of gasBefore, so an out-of-gas callee leaves ~1/64.
-            // More than that means it reverted for its own reasons — keep the existing tolerance.
-            //
-            // The bound is gasBefore/63 rather than gasBefore/64 to leave a buffer. A callee that
-            // reverts on its own after burning nearly everything it was given also lands just above
-            // 1/64, so a /64 threshold would be decided by rounding noise. /63 puts a margin of
-            // gasBefore/(63*64), ~1.5% of the forwarded gas, between the two verdicts. The cost is
-            // that such a gas-burning self-revert is rejected alongside a genuine out-of-gas; both
-            // are indistinguishable from here and rejecting is the safe direction — the message
-            // stays replayable, or recoverable via requestFailedMessageFix, instead of settling
-            // with the tokens stranded in the receiver.
+            (bool success,) = _recipient.call(
+                abi.encodeWithSelector(IERC20Receiver.onTokenBridged.selector, _token, _value, _data)
+            );
             if (!success) {
-                require(gasleft() > gasBefore / 63, "callback out of gas");
+                // Do not revert, to keep the original behaviour: the tokens stay with the recipient.
+                // The callback can fail because the recipient has no onTokenBridged and no accepting
+                // fallback (e.g. a Safe with CompatibilityFallbackHandler), because it reverted, or
+                // because it ran out of gas.
+                emit ReceiverCallbackFailed(_recipient, _token, _value, messageId());
             }
         }
     }
@@ -459,5 +472,12 @@ abstract contract BasicOmnibridge is
         return IERC677(_token).balanceOf(address(this)).sub(mediatorBalance(_token));
     }
 
-    function _handleTokens(address _token, bool _isNative, address _recipient, uint256 _value) internal virtual;
+    /**
+     * @dev Handles the bridged tokens.
+     * @return amount of tokens actually delivered to the recipient, net of any fee.
+     */
+    function _handleTokens(address _token, bool _isNative, address _recipient, uint256 _value)
+        internal
+        virtual
+        returns (uint256);
 }

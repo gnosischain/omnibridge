@@ -163,6 +163,8 @@ abstract contract OmnibridgeTestBase is TestHelpers {
         tokenFactory = new TokenFactory(owner, tokenImage);
 
         mediator = BasicOmnibridge(_deployMediator());
+        vm.prank(owner);
+        tokenFactory.setDeployer(address(mediator), true);
         amb = new AMBMock();
         token = _deployERC677Token("TEST", "TST", 18);
         currentDay = mediator.getCurrentDay();
@@ -204,6 +206,8 @@ abstract contract OmnibridgeTestBase is TestHelpers {
         vm.prank(owner);
         proxy.upgradeTo(1, address(mediator));
         mediator = BasicOmnibridge(address(proxy));
+        vm.prank(owner);
+        tokenFactory.setDeployer(address(mediator), true);
     }
 
     function _defaultInitArgs() internal view returns (InitArgs memory a) {
