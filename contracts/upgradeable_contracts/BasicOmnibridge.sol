@@ -100,9 +100,9 @@ abstract contract BasicOmnibridge is
     ) external onlyMediator {
         address bridgedToken = _getBridgedTokenOrDeploy(_token, _name, _symbol, _decimals);
 
-        _handleTokens(bridgedToken, false, _recipient, _value);
+        uint256 delivered = _handleTokens(bridgedToken, false, _recipient, _value);
 
-        _receiverCallback(_recipient, bridgedToken, _value, _data);
+        _receiverCallback(_recipient, bridgedToken, delivered, _data);
     }
 
     /**
@@ -137,9 +137,9 @@ abstract contract BasicOmnibridge is
 
         require(isTokenRegistered(token));
 
-        _handleTokens(token, false, _recipient, _value);
+        uint256 delivered = _handleTokens(token, false, _recipient, _value);
 
-        _receiverCallback(_recipient, token, _value, _data);
+        _receiverCallback(_recipient, token, delivered, _data);
     }
 
     /**
@@ -170,9 +170,9 @@ abstract contract BasicOmnibridge is
     {
         _ackBridgedTokenDeploy(_token);
 
-        _handleTokens(_token, true, _recipient, _value);
+        uint256 delivered = _handleTokens(_token, true, _recipient, _value);
 
-        _receiverCallback(_recipient, _token, _value, _data);
+        _receiverCallback(_recipient, _token, delivered, _data);
     }
 
     /**
@@ -472,5 +472,12 @@ abstract contract BasicOmnibridge is
         return IERC677(_token).balanceOf(address(this)).sub(mediatorBalance(_token));
     }
 
-    function _handleTokens(address _token, bool _isNative, address _recipient, uint256 _value) internal virtual;
+    /**
+     * @dev Handles the bridged tokens.
+     * @return amount of tokens actually delivered to the recipient, net of any fee.
+     */
+    function _handleTokens(address _token, bool _isNative, address _recipient, uint256 _value)
+        internal
+        virtual
+        returns (uint256);
 }

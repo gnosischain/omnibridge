@@ -65,8 +65,13 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
      * @param _isNative true, if given token is native to this chain and Unlock should be used.
      * @param _recipient address that will receive the tokens.
      * @param _value amount of tokens to be received.
+     * @return amount of tokens delivered to the recipient.
      */
-    function _handleTokens(address _token, bool _isNative, address _recipient, uint256 _value) internal override {
+    function _handleTokens(address _token, bool _isNative, address _recipient, uint256 _value)
+        internal
+        override
+        returns (uint256)
+    {
         // prohibit withdrawal of tokens during other bridge operations (e.g. relayTokens)
         // such reentrant withdrawal can lead to an incorrect balanceDiff calculation
         require(!lock());
@@ -77,6 +82,8 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
         _releaseTokens(_isNative, _token, _recipient, _value, _value);
 
         emit TokensBridged(_token, _recipient, _value, messageId());
+
+        return _value;
     }
 
     /**
