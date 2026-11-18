@@ -64,37 +64,6 @@ contract HomeOmnibridge is
     }
 
     /**
-     * One-time function to be used together with upgradeToAndCall method.
-     * Sets the token factory contract. Resumes token bridging in the home to foreign direction.
-     * Selector: 1ba9212d
-     * @param _tokenFactory address of the deployed TokenFactory contract.
-     * @param _forwardingRulesManager address of the deployed MultiTokenForwardingRulesManager contract.
-     * @param _gasLimitManager address of the deployed SelectorTokenGasLimitManager contract.
-     * @param _feeManager address of the deployed OmnibridgeFeeManager contract.
-     */
-    function migrateTo_3_3_0(
-        address _tokenFactory,
-        address _forwardingRulesManager,
-        address _gasLimitManager,
-        address _feeManager
-    ) external {
-        bytes32 upgradeStorage = 0x1ba9212d27ad775f3f89cdd276d3829dd95d169a049be071de905db3bbca633e; // keccak256(abi.encodePacked('migrateTo_3_3_0(address,address,address,address)'))
-        require(!boolStorage[upgradeStorage]);
-        //
-        require(msg.sender == address(this));
-
-        _setTokenFactory(_tokenFactory);
-        _setForwardingRulesManager(_forwardingRulesManager);
-        _setGasLimitManager(_gasLimitManager);
-        _setFeeManager(_feeManager);
-
-        uintStorage[keccak256(abi.encodePacked("dailyLimit", address(0)))] = 1000000000000000000000000000000000000;
-        emit DailyLimitChanged(address(0), 1000000000000000000000000000000000000);
-
-        boolStorage[upgradeStorage] = true;
-    }
-
-    /**
      * @dev Alias for bridgedTokenAddress for interface compatibility with the prior version of the Home mediator.
      * @param _foreignToken address of the native token contract on the other side.
      * @return address of the deployed bridged token contract.

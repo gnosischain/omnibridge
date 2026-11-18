@@ -59,50 +59,6 @@ contract ForeignOmnibridge is BasicOmnibridge, GasLimitManager, InterestConnecto
     }
 
     /**
-     * One-time function to be used together with upgradeToAndCall method.
-     * Sets the token factory contract and enables interest earning for USDC and USDT
-     * Selector: d814b1d7
-     * @param _tokenFactory address of the deployed TokenFactory contract.
-     */
-    function migrateTo_3_3_0(address _tokenFactory, address _interestImplementation) external {
-        bytes32 upgradeStorage = 0xd814b1d787b8a2d93a1c320d66800a58a03ed3bf12b285ec5ec1e0e26d6550cc; // keccak256(abi.encodePacked('migrateTo_3_3_0(address,address)'))
-        require(!boolStorage[upgradeStorage]);
-
-        _setTokenFactory(_tokenFactory);
-
-        // required for Tornado Cash operations
-        _setRequestGasLimit(2000000);
-
-        // USDC
-        address token = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
-        uint256 minCash = 2500000 * 1000000; // 2'500'000 USDC
-        _setInterestImplementation(token, _interestImplementation);
-        _setMinCashThreshold(token, minCash);
-
-        uint256 balance = mediatorBalance(token);
-        require(balance > minCash);
-        uint256 amount = balance - minCash;
-
-        IERC20(token).safeTransfer(_interestImplementation, amount);
-        IInterestImplementation(_interestImplementation).invest(token, amount);
-
-        // USDT
-        token = address(0xdAC17F958D2ee523a2206206994597C13D831ec7);
-        minCash = 750000 * 1000000; // 750'000 USDT
-        _setInterestImplementation(token, _interestImplementation);
-        _setMinCashThreshold(token, minCash);
-
-        balance = mediatorBalance(token);
-        require(balance > minCash);
-        amount = balance - minCash;
-
-        IERC20(token).safeTransfer(_interestImplementation, amount);
-        IInterestImplementation(_interestImplementation).invest(token, amount);
-
-        boolStorage[upgradeStorage] = true;
-    }
-
-    /**
      * @dev Handles the bridged tokens.
      * Checks that the value is inside the execution limits and invokes the Mint or Unlock accordingly.
      * @param _token token contract address on this side of the bridge.
